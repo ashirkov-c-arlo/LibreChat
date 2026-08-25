@@ -80,7 +80,30 @@ export type TModelSpec = {
   mcpServers?: string[];
   skills?: boolean | string[];
   subagents?: AgentSubagentsConfig;
+  effortSelector?: EffortSelectorConfig;
 };
+
+export const effortValues = ['low', 'medium', 'high', 'max', 'xhigh'] as const;
+export type EffortValue = (typeof effortValues)[number];
+
+export const effortFields = ['effort', 'reasoning_effort'] as const;
+export type EffortField = (typeof effortFields)[number];
+
+export type EffortSelectorConfig = {
+  field: EffortField;
+  options: EffortValue[];
+};
+
+/**
+ * UI metadata: opts a modelSpec into the inline composer thinking-effort
+ * selector. `field` names the existing conversation/provider param the choice
+ * is written to; `options` restricts the values offered for this spec. The
+ * default is the spec's own `preset[field]` - there is no separate default key.
+ */
+export const effortSelectorSchema = z.object({
+  field: z.enum(effortFields),
+  options: z.array(z.enum(effortValues)).min(1),
+});
 
 export const modelSpecSubagentsSchema = z.object({
   enabled: z.boolean().optional(),
@@ -117,13 +140,47 @@ export const tModelSpecSchema = z.object({
   mcpServers: z.array(z.string()).optional(),
   skills: z.union([z.boolean(), z.array(z.string())]).optional(),
   subagents: modelSpecSubagentsSchema.optional(),
+  effortSelector: effortSelectorSchema.optional(),
 });
 
-export const specsConfigSchema = z.object({
-  enforce: z.boolean().default(false),
-  prioritize: z.boolean().default(true),
-  list: z.array(tModelSpecSchema).default([]),
-  addedEndpoints: z.array(z.union([z.string(), eModelEndpointSchema])).optional(),
-});
+export const specsConfigSchema = z
+  .object({
+    enforce: z.boolean().default(false),
+    prioritize: z.boolean().default(true),
+    list: z.array(tModelSpecSchema).default([]),
+    addedEndpoints: z.array(z.union([z.string(), eModelEndpointSchema])).optional(),
+  })
+  .superRefine((config, ctx) => {
+    config.list?.forEach((spec, index) => {
+      const selector = spec.effortSelector;
+      if (!selector) {
+        return;
+      }
+
+      const addIssue = (message: string, key = 'effortSelector') =>
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['list', index, key],
+          message: `modelSpec "${spec.name}": ${message}`,
+        });
+
+      if (new Set(selector.options).size !== selector.options.length) {
+        addIssue('effortSelector.options must not contain duplicates');
+      }
+
+      const presetDefault = (spec.preset as Record<string, unknown> | undefined)?.[selector.field];
+      if (presetDefault == null || presetDefault === '') {
+        addIssue(
+          `preset.${selector.field} must be set when effortSelector.field is "${selector.field}"`,
+          'preset',
+        );
+        return;
+      }
+
+      if (!selector.options.includes(presetDefault as EffortValue)) {
+        addIssue(`preset.${selector.field} must be one of effortSelector.options`, 'preset');
+      }
+    });
+  });
 
 export type TSpecsConfig = z.infer<typeof specsConfigSchema>;
