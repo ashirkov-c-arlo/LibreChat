@@ -1,5 +1,5 @@
-import { effortValues } from './models';
 import type { EffortField, EffortValue, EffortSelectorConfig, TModelSpec } from './models';
+import { effortValues } from './models';
 
 export type ResolvedEffortConfig = {
   field: EffortField;
@@ -101,7 +101,5 @@ export function findActiveModelSpec(
     return undefined;
   }
 
-  return specs.find(
-    (spec) => spec.preset?.endpoint === endpoint && spec.preset?.model === model,
-  );
+  return specs.find((spec) => spec.preset?.endpoint === endpoint && spec.preset?.model === model);
 }
