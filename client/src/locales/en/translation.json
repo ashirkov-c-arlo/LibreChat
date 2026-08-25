@@ -2237,5 +2237,11 @@
   "com_ui_zoom_in": "Zoom in",
   "com_ui_zoom_level": "Zoom level",
   "com_ui_zoom_out": "Zoom out",
-  "com_user_message": "You"
+  "com_user_message": "You",
+  "com_ui_thinking_effort": "Thinking effort",
+  "com_ui_thinking_effort_low": "Low",
+  "com_ui_thinking_effort_medium": "Medium",
+  "com_ui_thinking_effort_high": "High",
+  "com_ui_thinking_effort_max": "Max",
+  "com_ui_thinking_effort_xhigh": "XHigh"
 }
