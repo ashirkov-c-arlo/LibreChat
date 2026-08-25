@@ -43,6 +43,7 @@ import AudioRecorder from './AudioRecorder';
 import CollapseChat from './CollapseChat';
 import QuoteButton from './QuoteButton';
 import StreamAudio from './StreamAudio';
+import ThinkingEffort from './ThinkingEffort';
 import TokenUsage from './TokenUsage';
 import StopButton from './StopButton';
 import SendButton from './SendButton';
@@ -669,6 +670,7 @@ const ChatForm = memo(function ChatForm({
                   }
                 />
                 <div className="mx-auto flex" />
+                <ThinkingEffort />
                 <TokenUsage index={index} conversation={conversation} isSubmitting={isSubmitting} />
                 {SpeechToText && (
                   <AudioRecorder
