@@ -1,23 +1,85 @@
-import { useState, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRecoilState } from 'recoil';
 import { useToastContext } from '@librechat/client';
 import { useSpeechToTextMutation } from '~/data-provider';
+import useLocalize from '~/hooks/useLocalize';
 import store from '~/store';
+
+type RecordingSource = 'microphone' | 'browser';
+
+const BROWSER_CAPTURE_DEVICE = 'librechat_browser_capture';
+const BROWSER_CAPTURE_DEVICE_KEY = 'librechatBrowserCaptureDeviceId';
+
+const getBestSupportedMimeType = () => {
+  const types = [
+    'audio/webm',
+    'audio/webm;codecs=opus',
+    'audio/mp4',
+    'audio/ogg;codecs=opus',
+    'audio/ogg',
+    'audio/wav',
+  ];
+
+  for (const type of types) {
+    if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(type)) {
+      return type;
+    }
+  }
+
+  const userAgent = typeof navigator === 'undefined' ? '' : navigator.userAgent.toLowerCase();
+  if (userAgent.includes('safari') && !userAgent.includes('chrome')) {
+    return 'audio/mp4';
+  }
+  if (userAgent.includes('firefox')) {
+    return 'audio/ogg';
+  }
+  return 'audio/webm';
+};
+
+const getFileExtension = (mimeType: string) => {
+  if (mimeType.includes('mp4')) {
+    return 'm4a';
+  }
+  if (mimeType.includes('ogg')) {
+    return 'ogg';
+  }
+  if (mimeType.includes('wav')) {
+    return 'wav';
+  }
+  return 'webm';
+};
+
+const normalizeDeviceLabel = (label: string) => label.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+
+const isMissingDeviceError = (error: Error) =>
+  error.name === 'NotFoundError' || error.name === 'OverconstrainedError';
+
+const browserCaptureConstraints = (deviceId?: string): MediaTrackConstraints => ({
+  ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+  echoCancellation: false,
+  noiseSuppression: false,
+  autoGainControl: false,
+});
 
 const useSpeechToTextExternal = (
   setText: (text: string) => void,
   onTranscriptionComplete: (text: string) => void,
 ) => {
+  const localize = useLocalize();
   const { showToast } = useToastContext();
-  const audioStream = useRef<MediaStream | null>(null);
+  const audioStreamRef = useRef<MediaStream | null>(null);
   const animationFrameIdRef = useRef<number | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-
+  const recordingSourceRef = useRef<RecordingSource | null>(null);
+  const busySourceRef = useRef<RecordingSource | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
-  const [isListening, setIsListening] = useState(false);
-  const [isRequestBeingMade, setIsRequestBeingMade] = useState(false);
-  const [audioMimeType, setAudioMimeType] = useState<string>(() => getBestSupportedMimeType());
+  const mountedRef = useRef(true);
+  const discardRecordingRef = useRef(false);
+
+  const [recordingSource, setRecordingSource] = useState<RecordingSource | null>(null);
+  const [requestingSource, setRequestingSource] = useState<RecordingSource | null>(null);
+  const [finalizingSource, setFinalizingSource] = useState<RecordingSource | null>(null);
 
   const [minDecibels] = useRecoilState(store.decibelValue);
   const [autoSendText] = useRecoilState(store.autoSendText);
@@ -25,227 +87,299 @@ const useSpeechToTextExternal = (
   const [speechToText] = useRecoilState<boolean>(store.speechToText);
   const [autoTranscribeAudio] = useRecoilState<boolean>(store.autoTranscribeAudio);
 
-  const { mutate: processAudio, isLoading: isProcessing } = useSpeechToTextMutation({
+  const resetBusyState = () => {
+    busySourceRef.current = null;
+    if (!mountedRef.current) {
+      return;
+    }
+    setRequestingSource(null);
+    setRecordingSource(null);
+    setFinalizingSource(null);
+  };
+
+  const { mutate: processAudio } = useSpeechToTextMutation({
     onSuccess: (data) => {
+      if (!mountedRef.current) {
+        return;
+      }
       const extractedText = data.text;
       setText(extractedText);
-      setIsRequestBeingMade(false);
+      resetBusyState();
 
       if (autoSendText > -1 && speechToText && extractedText.length > 0) {
-        setTimeout(() => {
-          onTranscriptionComplete(extractedText);
-        }, autoSendText * 1000);
+        setTimeout(() => onTranscriptionComplete(extractedText), autoSendText * 1000);
       }
     },
     onError: () => {
+      if (!mountedRef.current) {
+        return;
+      }
       showToast({
         message: 'An error occurred while processing the audio, maybe the audio was too short',
         status: 'error',
       });
-      setIsRequestBeingMade(false);
+      resetBusyState();
     },
   });
 
-  function getBestSupportedMimeType() {
-    const types = [
-      'audio/webm',
-      'audio/webm;codecs=opus',
-      'audio/mp4',
-      'audio/ogg;codecs=opus',
-      'audio/ogg',
-      'audio/wav',
-    ];
-
-    for (const type of types) {
-      if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(type)) {
-        return type;
-      }
+  const stopMonitoring = () => {
+    if (animationFrameIdRef.current !== null) {
+      window.cancelAnimationFrame(animationFrameIdRef.current);
+      animationFrameIdRef.current = null;
     }
-
-    if (typeof navigator !== 'undefined') {
-      const ua = navigator.userAgent.toLowerCase();
-      if (ua.indexOf('safari') !== -1 && ua.indexOf('chrome') === -1) {
-        return 'audio/mp4';
-      } else if (ua.indexOf('firefox') !== -1) {
-        return 'audio/ogg';
-      }
-    }
-
-    return 'audio/webm';
-  }
-
-  const getFileExtension = (mimeType: string) => {
-    if (mimeType.includes('mp4')) {
-      return 'm4a';
-    } else if (mimeType.includes('ogg')) {
-      return 'ogg';
-    } else if (mimeType.includes('wav')) {
-      return 'wav';
-    } else {
-      return 'webm';
+    if (audioContextRef.current) {
+      void audioContextRef.current.close();
+      audioContextRef.current = null;
     }
   };
 
-  const cleanup = () => {
-    if (mediaRecorderRef.current) {
-      mediaRecorderRef.current = null;
-    }
+  const stopTracks = () => {
+    audioStreamRef.current?.getTracks().forEach((track) => track.stop());
+    audioStreamRef.current = null;
   };
 
-  const getMicrophonePermission = async () => {
-    try {
-      const streamData = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: false,
+  const cleanupMedia = () => {
+    stopMonitoring();
+    stopTracks();
+    mediaRecorderRef.current = null;
+    recordingSourceRef.current = null;
+  };
+
+  const requestAudioStream = (deviceId?: string) =>
+    navigator.mediaDevices.getUserMedia({
+      audio: browserCaptureConstraints(deviceId),
+      video: false,
+    });
+
+  const saveBrowserCaptureDevice = (stream: MediaStream) => {
+    const deviceId = stream.getAudioTracks()[0]?.getSettings().deviceId;
+    if (deviceId) {
+      localStorage.setItem(BROWSER_CAPTURE_DEVICE_KEY, deviceId);
+    }
+    return stream;
+  };
+
+  const getBrowserCaptureStream = async () => {
+    const savedDeviceId = localStorage.getItem(BROWSER_CAPTURE_DEVICE_KEY);
+    if (savedDeviceId) {
+      try {
+        return saveBrowserCaptureDevice(await requestAudioStream(savedDeviceId));
+      } catch (error) {
+        if (!(error instanceof Error) || !isMissingDeviceError(error)) {
+          throw error;
+        }
+        localStorage.removeItem(BROWSER_CAPTURE_DEVICE_KEY);
+      }
+    }
+
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const audioInputs = devices.filter((device) => device.kind === 'audioinput');
+    const captureDevice = audioInputs.find((device) =>
+      normalizeDeviceLabel(device.label).includes(BROWSER_CAPTURE_DEVICE),
+    );
+
+    if (captureDevice) {
+      return saveBrowserCaptureDevice(await requestAudioStream(captureDevice.deviceId));
+    }
+    if (audioInputs.some((device) => device.label !== '')) {
+      throw new DOMException('Browser capture device not found', 'NotFoundError');
+    }
+
+    showToast({
+      message: localize('com_ui_browser_audio_select_device'),
+      status: 'info',
+    });
+    const stream = await requestAudioStream();
+    const track = stream.getAudioTracks()[0];
+    if (track?.label && !normalizeDeviceLabel(track.label).includes(BROWSER_CAPTURE_DEVICE)) {
+      stream.getTracks().forEach((item) => item.stop());
+      throw new DOMException('Browser capture device not selected', 'NotFoundError');
+    }
+    return saveBrowserCaptureDevice(stream);
+  };
+
+  const getAudioStream = (source: RecordingSource) => {
+    if (source === 'browser') {
+      return getBrowserCaptureStream();
+    }
+    return navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+  };
+
+  const handleCaptureError = (error: Error) => {
+    if (isMissingDeviceError(error)) {
+      localStorage.removeItem(BROWSER_CAPTURE_DEVICE_KEY);
+      showToast({ message: localize('com_ui_browser_audio_unavailable'), status: 'error' });
+      return;
+    }
+    if (error.name === 'NotAllowedError' || error.name === 'SecurityError') {
+      showToast({ message: localize('com_ui_browser_audio_permission_denied'), status: 'error' });
+      return;
+    }
+    showToast({ message: localize('com_ui_browser_audio_error'), status: 'error' });
+  };
+
+  const finishRecording = (source: RecordingSource, mimeType: string) => {
+    const audioChunks = audioChunksRef.current;
+    audioChunksRef.current = [];
+    cleanupMedia();
+
+    if (discardRecordingRef.current) {
+      return;
+    }
+    if (audioChunks.length === 0 || audioChunks.every((chunk) => chunk.size === 0)) {
+      showToast({
+        message:
+          source === 'browser'
+            ? localize('com_ui_browser_audio_too_short')
+            : 'The audio was too short',
+        status: 'warning',
       });
-      audioStream.current = streamData ?? null;
-    } catch {
-      audioStream.current = null;
+      resetBusyState();
+      return;
     }
+
+    const audioBlob = new Blob(audioChunks, { type: mimeType });
+    const audioFile = new File([audioBlob], `audio.${getFileExtension(mimeType)}`, {
+      type: mimeType,
+    });
+    const formData = new FormData();
+    formData.append('audio', audioFile);
+    if (languageSTT) {
+      formData.append('language', languageSTT);
+    }
+    processAudio(formData);
   };
 
-  const handleStop = () => {
-    if (audioChunksRef.current.length > 0) {
-      const audioBlob = new Blob(audioChunksRef.current, { type: audioMimeType });
-      const fileExtension = getFileExtension(audioMimeType);
-
-      audioChunksRef.current = [];
-
-      const formData = new FormData();
-      formData.append('audio', audioBlob, `audio.${fileExtension}`);
-      if (languageSTT) {
-        formData.append('language', languageSTT);
-      }
-      setIsRequestBeingMade(true);
-      cleanup();
-      processAudio(formData);
-    } else {
-      showToast({ message: 'The audio was too short', status: 'warning' });
+  const stopRecording = (source: RecordingSource) => {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || recorder.state !== 'recording' || recordingSourceRef.current !== source) {
+      return false;
     }
+
+    if (mountedRef.current) {
+      setRecordingSource(null);
+      setFinalizingSource(source);
+    }
+    recorder.stop();
+    return true;
   };
 
-  const monitorSilence = (stream: MediaStream, stopRecording: () => void) => {
+  const monitorSilence = (stream: MediaStream) => {
     const audioContext = new AudioContext();
-    const audioStreamSource = audioContext.createMediaStreamSource(stream);
+    audioContextRef.current = audioContext;
     const analyser = audioContext.createAnalyser();
     analyser.minDecibels = minDecibels;
-    audioStreamSource.connect(analyser);
+    audioContext.createMediaStreamSource(stream).connect(analyser);
 
-    const bufferLength = analyser.frequencyBinCount;
-    const domainData = new Uint8Array(bufferLength);
+    const domainData = new Uint8Array(analyser.frequencyBinCount);
     let lastSoundTime = Date.now();
-
     const detectSound = () => {
       analyser.getByteFrequencyData(domainData);
-      const isSoundDetected = domainData.some((value) => value > 0);
-
-      if (isSoundDetected) {
+      if (domainData.some((value) => value > 0)) {
         lastSoundTime = Date.now();
       }
-
-      const timeSinceLastSound = Date.now() - lastSoundTime;
-      const isOverSilenceThreshold = timeSinceLastSound > 3000;
-
-      if (isOverSilenceThreshold) {
-        stopRecording();
+      if (Date.now() - lastSoundTime > 3000) {
+        stopRecording('microphone');
         return;
       }
-
       animationFrameIdRef.current = window.requestAnimationFrame(detectSound);
     };
-
     animationFrameIdRef.current = window.requestAnimationFrame(detectSound);
   };
 
-  const startRecording = async () => {
-    if (isRequestBeingMade) {
-      showToast({ message: 'A request is already being made. Please wait.', status: 'warning' });
+  const startRecording = async (source: RecordingSource) => {
+    if (busySourceRef.current) {
       return;
     }
-
-    if (!audioStream.current) {
-      await getMicrophonePermission();
-    }
-
-    if (audioStream.current) {
-      try {
-        audioChunksRef.current = [];
-        const bestMimeType = getBestSupportedMimeType();
-        setAudioMimeType(bestMimeType);
-
-        mediaRecorderRef.current = new MediaRecorder(audioStream.current, {
-          mimeType: audioMimeType,
-        });
-        mediaRecorderRef.current.addEventListener('dataavailable', (event: BlobEvent) => {
-          audioChunksRef.current.push(event.data);
-        });
-        mediaRecorderRef.current.addEventListener('stop', handleStop);
-        mediaRecorderRef.current.start(100);
-        if (!audioContextRef.current && autoTranscribeAudio && speechToText) {
-          monitorSilence(audioStream.current, stopRecording);
-        }
-        setIsListening(true);
-      } catch (error) {
-        showToast({ message: `Error starting recording: ${error}`, status: 'error' });
-      }
-    } else {
-      showToast({ message: 'Microphone permission not granted', status: 'error' });
-    }
-  };
-
-  const stopRecording = () => {
-    if (!mediaRecorderRef.current) {
-      return;
-    }
-
-    if (mediaRecorderRef.current.state === 'recording') {
-      mediaRecorderRef.current.stop();
-
-      audioStream.current?.getTracks().forEach((track) => track.stop());
-      audioStream.current = null;
-
-      if (animationFrameIdRef.current !== null) {
-        window.cancelAnimationFrame(animationFrameIdRef.current);
-        animationFrameIdRef.current = null;
-      }
-
-      setIsListening(false);
-    } else {
-      showToast({ message: 'MediaRecorder is not recording', status: 'error' });
-    }
-  };
-
-  const externalStartRecording = () => {
     if (typeof MediaRecorder === 'undefined') {
       showToast({ message: 'MediaRecorder is not supported in this browser', status: 'error' });
       return;
     }
 
-    if (isListening) {
-      showToast({ message: 'Already listening. Please stop recording first.', status: 'warning' });
-      return;
-    }
+    busySourceRef.current = source;
+    setRequestingSource(source);
+    try {
+      const stream = await getAudioStream(source);
+      if (!mountedRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
 
-    startRecording();
-  };
-
-  const externalStopRecording = () => {
-    if (!isListening) {
-      showToast({
-        message: 'Not currently recording. Please start recording first.',
-        status: 'warning',
+      audioStreamRef.current = stream;
+      audioChunksRef.current = [];
+      const preferredMimeType = getBestSupportedMimeType();
+      const recorder = new MediaRecorder(stream, { mimeType: preferredMimeType });
+      const mimeType = recorder.mimeType || preferredMimeType;
+      mediaRecorderRef.current = recorder;
+      recordingSourceRef.current = source;
+      recorder.addEventListener('dataavailable', (event: BlobEvent) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
       });
-      return;
-    }
+      recorder.addEventListener('stop', () => finishRecording(source, mimeType), { once: true });
+      if (source === 'browser') {
+        stream.getAudioTracks()[0]?.addEventListener(
+          'ended',
+          () => {
+            if (recordingSourceRef.current !== 'browser' || discardRecordingRef.current) {
+              return;
+            }
+            showToast({ message: localize('com_ui_browser_audio_unavailable'), status: 'error' });
+            stopRecording('browser');
+          },
+          { once: true },
+        );
+      }
+      recorder.start(100);
+      setRequestingSource(null);
+      setRecordingSource(source);
 
-    stopRecording();
+      if (source === 'microphone' && autoTranscribeAudio && speechToText) {
+        monitorSilence(stream);
+      }
+    } catch (error) {
+      cleanupMedia();
+      resetBusyState();
+      if (source === 'browser') {
+        handleCaptureError(error instanceof Error ? error : new Error(String(error)));
+        return;
+      }
+      showToast({ message: 'Microphone permission not granted', status: 'error' });
+    }
   };
+
+  useEffect(
+    () => () => {
+      mountedRef.current = false;
+      discardRecordingRef.current = true;
+      const recorder = mediaRecorderRef.current;
+      if (recorder?.state === 'recording') {
+        recorder.stop();
+      }
+      if (animationFrameIdRef.current !== null) {
+        window.cancelAnimationFrame(animationFrameIdRef.current);
+      }
+      if (audioContextRef.current) {
+        void audioContextRef.current.close();
+      }
+      audioStreamRef.current?.getTracks().forEach((track) => track.stop());
+      audioStreamRef.current = null;
+      mediaRecorderRef.current = null;
+      recordingSourceRef.current = null;
+    },
+    [],
+  );
 
   return {
-    isListening,
-    externalStopRecording,
-    externalStartRecording,
-    isLoading: isProcessing,
+    isListening: recordingSource === 'microphone',
+    isLoading: requestingSource === 'microphone' || finalizingSource === 'microphone',
+    externalStartRecording: () => startRecording('microphone'),
+    externalStopRecording: () => stopRecording('microphone'),
+    isBrowserAudioListening: recordingSource === 'browser',
+    isBrowserAudioLoading: requestingSource === 'browser' || finalizingSource === 'browser',
+    startBrowserAudioRecording: () => startRecording('browser'),
+    stopBrowserAudioRecording: () => stopRecording('browser'),
   };
 };
 

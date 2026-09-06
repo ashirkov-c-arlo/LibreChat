@@ -1,18 +1,23 @@
 import React from 'react';
 import { RecoilRoot } from 'recoil';
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import AudioRecorder from '../AudioRecorder';
 import store from '~/store';
 
 let mockSpeechToTextEndpoint = 'browser';
 let mockBrowserIsListening = false;
 let mockExternalIsListening = false;
+let mockBrowserAudioIsListening = false;
+let mockBrowserAudioIsLoading = false;
 let mockSetText: ((text: string) => void) | undefined;
+let mockOnTranscriptionComplete: ((text: string) => void) | undefined;
 
 const mockStartSpeechRecordingBrowser = jest.fn();
 const mockStopSpeechRecordingBrowser = jest.fn();
 const mockStartSpeechRecordingExternal = jest.fn();
 const mockStopSpeechRecordingExternal = jest.fn();
+const mockStartBrowserAudioRecording = jest.fn();
+const mockStopBrowserAudioRecording = jest.fn();
 const mockSetValue = jest.fn();
 const mockReset = jest.fn();
 const mockGetValues = jest.fn(() => 'existing draft');
@@ -59,13 +64,18 @@ jest.mock('~/hooks/Input/useSpeechToTextBrowser', () => ({
 
 jest.mock('~/hooks/Input/useSpeechToTextExternal', () => ({
   __esModule: true,
-  default: (setText: (text: string) => void) => {
+  default: (setText: (text: string) => void, onTranscriptionComplete: (text: string) => void) => {
     mockSetText = setText;
+    mockOnTranscriptionComplete = onTranscriptionComplete;
     return {
       isListening: mockExternalIsListening,
       isLoading: false,
       externalStartRecording: mockStartSpeechRecordingExternal,
       externalStopRecording: mockStopSpeechRecordingExternal,
+      isBrowserAudioListening: mockBrowserAudioIsListening,
+      isBrowserAudioLoading: mockBrowserAudioIsLoading,
+      startBrowserAudioRecording: mockStartBrowserAudioRecording,
+      stopBrowserAudioRecording: mockStopBrowserAudioRecording,
     };
   },
 }));
@@ -123,7 +133,55 @@ describe('AudioRecorder speech shortcut', () => {
     mockSpeechToTextEndpoint = 'browser';
     mockBrowserIsListening = false;
     mockExternalIsListening = false;
+    mockBrowserAudioIsListening = false;
+    mockBrowserAudioIsLoading = false;
     mockSetText = undefined;
+    mockOnTranscriptionComplete = undefined;
+  });
+
+  it('renders the Firefox audio control immediately before the microphone control', () => {
+    renderRecorder();
+
+    const buttons = screen.getAllByRole('button');
+    expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
+      'com_ui_browser_audio_start',
+      'com_ui_use_micrphone',
+    ]);
+    expect(buttons[0].querySelector('.lucide-audio-lines')).toBeInTheDocument();
+
+    fireEvent.click(buttons[0]);
+    expect(mockStartBrowserAudioRecording).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves the existing draft when Firefox audio is transcribed', () => {
+    renderRecorder();
+
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_browser_audio_start' }));
+    act(() => mockOnTranscriptionComplete?.('transcript'));
+
+    expect(mockAsk).toHaveBeenCalledWith({ text: 'existing draft transcript' });
+  });
+
+  it('stops Firefox audio and blocks the microphone while it is recording', () => {
+    mockBrowserAudioIsListening = true;
+    renderRecorder();
+
+    const browserAudioButton = screen.getByRole('button', {
+      name: 'com_ui_browser_audio_stop',
+    });
+    expect(screen.getByRole('button', { name: 'com_ui_use_micrphone' })).toBeDisabled();
+    expect(browserAudioButton).not.toBeDisabled();
+    expect(browserAudioButton.querySelector('.lucide-audio-lines-off')).toBeInTheDocument();
+
+    fireEvent.click(browserAudioButton);
+    expect(mockStopBrowserAudioRecording).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks Firefox audio while the microphone is recording', () => {
+    mockBrowserIsListening = true;
+    renderRecorder();
+
+    expect(screen.getByRole('button', { name: 'com_ui_browser_audio_start' })).toBeDisabled();
   });
 
   it('preserves the existing draft when browser recording starts from the shortcut', () => {
