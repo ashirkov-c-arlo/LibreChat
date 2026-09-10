@@ -9,6 +9,8 @@ let mockBrowserIsListening = false;
 let mockExternalIsListening = false;
 let mockBrowserAudioIsListening = false;
 let mockBrowserAudioIsLoading = false;
+let mockBrowserCaptureDevices: { deviceId: string; label: string }[] = [];
+let mockSelectedBrowserCaptureDeviceId: string | null = null;
 let mockSetText: ((text: string) => void) | undefined;
 let mockOnTranscriptionComplete: ((text: string) => void) | undefined;
 
@@ -18,6 +20,8 @@ const mockStartSpeechRecordingExternal = jest.fn();
 const mockStopSpeechRecordingExternal = jest.fn();
 const mockStartBrowserAudioRecording = jest.fn();
 const mockStopBrowserAudioRecording = jest.fn();
+const mockLoadBrowserCaptureDevices = jest.fn();
+const mockSelectBrowserCaptureDevice = jest.fn();
 const mockSetValue = jest.fn();
 const mockReset = jest.fn();
 const mockGetValues = jest.fn(() => 'existing draft');
@@ -76,6 +80,10 @@ jest.mock('~/hooks/Input/useSpeechToTextExternal', () => ({
       isBrowserAudioLoading: mockBrowserAudioIsLoading,
       startBrowserAudioRecording: mockStartBrowserAudioRecording,
       stopBrowserAudioRecording: mockStopBrowserAudioRecording,
+      browserCaptureDevices: mockBrowserCaptureDevices,
+      selectedBrowserCaptureDeviceId: mockSelectedBrowserCaptureDeviceId,
+      loadBrowserCaptureDevices: mockLoadBrowserCaptureDevices,
+      selectBrowserCaptureDevice: mockSelectBrowserCaptureDevice,
     };
   },
 }));
@@ -135,6 +143,8 @@ describe('AudioRecorder speech shortcut', () => {
     mockExternalIsListening = false;
     mockBrowserAudioIsListening = false;
     mockBrowserAudioIsLoading = false;
+    mockBrowserCaptureDevices = [];
+    mockSelectedBrowserCaptureDeviceId = null;
     mockSetText = undefined;
     mockOnTranscriptionComplete = undefined;
   });
@@ -145,12 +155,28 @@ describe('AudioRecorder speech shortcut', () => {
     const buttons = screen.getAllByRole('button');
     expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
       'com_ui_browser_audio_start',
+      'com_ui_browser_audio_devices',
       'com_ui_use_micrphone',
     ]);
     expect(buttons[0].querySelector('.lucide-audio-lines')).toBeInTheDocument();
 
     fireEvent.click(buttons[0]);
     expect(mockStartBrowserAudioRecording).toHaveBeenCalledTimes(1);
+  });
+
+  it('lists librechat_ devices and selects one from the chevron menu', async () => {
+    mockBrowserCaptureDevices = [
+      { deviceId: 'dev-1', label: 'librechat_sink' },
+      { deviceId: 'dev-2', label: 'librechat_monitor' },
+    ];
+    renderRecorder();
+
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_browser_audio_devices' }));
+    expect(mockLoadBrowserCaptureDevices).toHaveBeenCalledTimes(1);
+
+    const option = await screen.findByText('librechat_monitor');
+    fireEvent.click(option);
+    expect(mockSelectBrowserCaptureDevice).toHaveBeenCalledWith('dev-2');
   });
 
   it('preserves the existing draft when Firefox audio is transcribed', () => {

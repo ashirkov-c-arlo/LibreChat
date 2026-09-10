@@ -2005,6 +2005,8 @@
   "com_ui_speech_not_supported_use_external": "Your browser does not support speech recognition. Try switching to External STT in Settings > Speech.",
   "com_ui_speech_while_submitting": "Can't submit speech while a response is being generated",
   "com_ui_browser_audio_error": "Could not record Firefox audio",
+  "com_ui_browser_audio_devices": "Select audio device",
+  "com_ui_browser_audio_no_devices": "No librechat_ audio devices found",
   "com_ui_browser_audio_permission_denied": "Permission to record Firefox audio was denied",
   "com_ui_browser_audio_select_device": "Select LibreChat_Browser_Capture in the microphone prompt",
   "com_ui_browser_audio_start": "Record Firefox audio",

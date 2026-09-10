@@ -1,15 +1,17 @@
-import { memo, useCallback, useEffect, useRef } from 'react';
-import { AudioLines, createLucideIcon, MicOff } from 'lucide-react';
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { AudioLines, Check, ChevronDown, createLucideIcon, MicOff } from 'lucide-react';
+import * as Ariakit from '@ariakit/react';
 import { useRecoilValue } from 'recoil';
 import {
   IconButton,
+  DropdownPopup,
   useToastContext,
   TooltipAnchor,
   ListeningIcon,
   Spinner,
 } from '@librechat/client';
 import { useLocalize, useSpeechToText, useGetAudioSettings } from '~/hooks';
-import { globalAudioId, type TAskFunction } from '~/common';
+import { globalAudioId, type TAskFunction, type MenuItemProps } from '~/common';
 import { useChatFormContext } from '~/Providers';
 import store from '~/store';
 
@@ -108,11 +110,16 @@ export default memo(function AudioRecorder({
     stopRecording,
     startBrowserAudioRecording,
     stopBrowserAudioRecording,
+    browserCaptureDevices,
+    selectedBrowserCaptureDeviceId,
+    loadBrowserCaptureDevices,
+    selectBrowserCaptureDevice,
   } = useSpeechToText(setText, onTranscriptionComplete);
   const microphoneDisabled = recorderDisabled || isBrowserAudioListening || isBrowserAudioLoading;
   const browserAudioDisabled =
     recorderDisabled ||
     (!isBrowserAudioListening && (isBrowserAudioLoading || isListening || isLoading));
+  const browserAudioMenuDisabled = recorderDisabled || isListening || isLoading;
 
   const handleStartRecording = useCallback(() => {
     if (isBrowserAudioListening || isBrowserAudioLoading) {
@@ -143,6 +150,53 @@ export default memo(function AudioRecorder({
   const handleStopBrowserAudio = useCallback(() => {
     stopBrowserAudioRecording();
   }, [stopBrowserAudioRecording]);
+
+  const browserAudioMenuId = useId();
+  const [browserAudioMenuOpen, setBrowserAudioMenuOpen] = useState(false);
+
+  const handleOpenBrowserAudioMenu = useCallback(() => {
+    void loadBrowserCaptureDevices();
+  }, [loadBrowserCaptureDevices]);
+
+  const handleBrowserAudioMenuOpenChange = useCallback(
+    (open: boolean) => {
+      setBrowserAudioMenuOpen(open);
+      if (open) {
+        handleOpenBrowserAudioMenu();
+      }
+    },
+    [handleOpenBrowserAudioMenu],
+  );
+
+  const handleSelectBrowserAudioDevice = useCallback(
+    (deviceId: string) => {
+      void selectBrowserCaptureDevice(deviceId);
+    },
+    [selectBrowserCaptureDevice],
+  );
+
+  const browserAudioDeviceItems = useMemo<MenuItemProps[]>(() => {
+    if (browserCaptureDevices.length === 0) {
+      return [
+        {
+          id: 'no-browser-audio-devices',
+          label: localize('com_ui_browser_audio_no_devices'),
+          disabled: true,
+          hideOnClick: false,
+        },
+      ];
+    }
+    return browserCaptureDevices.map((device) => {
+      const selected = selectedBrowserCaptureDeviceId === device.deviceId;
+      return {
+        id: device.deviceId,
+        label: device.label,
+        ariaChecked: selected,
+        icon: selected ? <Check className="size-4" aria-hidden="true" /> : undefined,
+        onClick: () => handleSelectBrowserAudioDevice(device.deviceId),
+      };
+    });
+  }, [browserCaptureDevices, selectedBrowserCaptureDeviceId, localize, handleSelectBrowserAudioDevice]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -189,25 +243,51 @@ export default memo(function AudioRecorder({
 
   return (
     <>
-      <TooltipAnchor
-        description={browserAudioLabel}
-        render={
-          <IconButton
-            id="browser-audio-recorder"
-            type="button"
-            variant={isBrowserAudioListening ? 'destructive' : 'ghost'}
-            size="theme"
-            shape="theme"
-            label={browserAudioLabel}
-            onClick={isBrowserAudioListening ? handleStopBrowserAudio : handleStartBrowserAudio}
-            disabled={browserAudioDisabled}
-            className={isBrowserAudioListening ? 'p-1' : 'p-1 hover:bg-surface-composer-hover'}
-            aria-pressed={isBrowserAudioListening}
-          >
-            {renderBrowserAudioIcon()}
-          </IconButton>
-        }
-      />
+      <div className="flex items-center">
+        <TooltipAnchor
+          description={browserAudioLabel}
+          render={
+            <IconButton
+              id="browser-audio-recorder"
+              type="button"
+              variant={isBrowserAudioListening ? 'destructive' : 'ghost'}
+              size="theme"
+              shape="theme"
+              label={browserAudioLabel}
+              onClick={isBrowserAudioListening ? handleStopBrowserAudio : handleStartBrowserAudio}
+              disabled={browserAudioDisabled}
+              className={isBrowserAudioListening ? 'p-1' : 'p-1 hover:bg-surface-composer-hover'}
+              aria-pressed={isBrowserAudioListening}
+            >
+              {renderBrowserAudioIcon()}
+            </IconButton>
+          }
+        />
+        <DropdownPopup
+          portal
+          unmountOnHide
+          menuId={browserAudioMenuId}
+          isOpen={browserAudioMenuOpen}
+          setIsOpen={handleBrowserAudioMenuOpenChange}
+          trigger={
+            <Ariakit.MenuButton
+              id="browser-audio-devices"
+              type="button"
+              disabled={browserAudioMenuDisabled}
+              aria-label={localize('com_ui_browser_audio_devices')}
+              title={localize('com_ui_browser_audio_devices')}
+              className="flex items-center justify-center rounded-theme-control text-text-secondary transition-colors hover:bg-surface-composer-hover disabled:pointer-events-none disabled:opacity-50"
+              style={{
+                height: 'calc(var(--theme-control-height, 2.25rem) * 2 / 3)',
+                width: '0.85rem',
+              }}
+            >
+              <ChevronDown className="h-3 w-3" aria-hidden="true" />
+            </Ariakit.MenuButton>
+          }
+          items={browserAudioDeviceItems}
+        />
+      </div>
       <TooltipAnchor
         description={localize('com_ui_use_micrphone')}
         render={

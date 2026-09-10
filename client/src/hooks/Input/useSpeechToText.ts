@@ -14,6 +14,10 @@ const useSpeechToText = (
   startRecording: () => void | Promise<void>;
   stopBrowserAudioRecording: () => boolean;
   startBrowserAudioRecording: () => Promise<void>;
+  browserCaptureDevices: { deviceId: string; label: string }[];
+  selectedBrowserCaptureDeviceId: string | null;
+  loadBrowserCaptureDevices: () => Promise<void>;
+  selectBrowserCaptureDevice: (deviceId: string) => Promise<void>;
 } => {
   const { speechToTextEndpoint } = useGetAudioSettings();
   const externalSpeechToText = speechToTextEndpoint === 'external';
@@ -34,6 +38,10 @@ const useSpeechToText = (
     isBrowserAudioListening,
     stopBrowserAudioRecording,
     startBrowserAudioRecording,
+    browserCaptureDevices,
+    selectedBrowserCaptureDeviceId,
+    loadBrowserCaptureDevices,
+    selectBrowserCaptureDevice,
   } = useSpeechToTextExternal(setText, onTranscriptionComplete);
 
   const isListening = externalSpeechToText ? speechIsListeningExternal : speechIsListeningBrowser;
@@ -55,6 +63,10 @@ const useSpeechToText = (
     startRecording,
     stopBrowserAudioRecording,
     startBrowserAudioRecording,
+    browserCaptureDevices,
+    selectedBrowserCaptureDeviceId,
+    loadBrowserCaptureDevices,
+    selectBrowserCaptureDevice,
   };
 };
 

@@ -7,7 +7,9 @@ import store from '~/store';
 
 type RecordingSource = 'microphone' | 'browser';
 
-const BROWSER_CAPTURE_DEVICE = 'librechat_browser_capture';
+type BrowserCaptureDevice = { deviceId: string; label: string };
+
+const BROWSER_CAPTURE_PREFIX = 'librechat_';
 const BROWSER_CAPTURE_DEVICE_KEY = 'librechatBrowserCaptureDeviceId';
 
 const getBestSupportedMimeType = () => {
@@ -51,6 +53,9 @@ const getFileExtension = (mimeType: string) => {
 
 const normalizeDeviceLabel = (label: string) => label.toLowerCase().replace(/[^a-z0-9]+/g, '_');
 
+const matchesBrowserCaptureDevice = (label: string) =>
+  normalizeDeviceLabel(label).startsWith(BROWSER_CAPTURE_PREFIX);
+
 const isMissingDeviceError = (error: Error) =>
   error.name === 'NotFoundError' || error.name === 'OverconstrainedError';
 
@@ -76,10 +81,17 @@ const useSpeechToTextExternal = (
   const audioChunksRef = useRef<Blob[]>([]);
   const mountedRef = useRef(true);
   const discardRecordingRef = useRef(false);
+  const pendingSwitchDeviceRef = useRef<string | null>(null);
 
   const [recordingSource, setRecordingSource] = useState<RecordingSource | null>(null);
   const [requestingSource, setRequestingSource] = useState<RecordingSource | null>(null);
   const [finalizingSource, setFinalizingSource] = useState<RecordingSource | null>(null);
+  const [browserCaptureDevices, setBrowserCaptureDevices] = useState<BrowserCaptureDevice[]>([]);
+  const [selectedBrowserCaptureDeviceId, setSelectedBrowserCaptureDeviceId] = useState<
+    string | null
+  >(() =>
+    typeof localStorage === 'undefined' ? null : localStorage.getItem(BROWSER_CAPTURE_DEVICE_KEY),
+  );
 
   const [minDecibels] = useRecoilState(store.decibelValue);
   const [autoSendText] = useRecoilState(store.autoSendText);
@@ -175,7 +187,7 @@ const useSpeechToTextExternal = (
     const devices = await navigator.mediaDevices.enumerateDevices();
     const audioInputs = devices.filter((device) => device.kind === 'audioinput');
     const captureDevice = audioInputs.find((device) =>
-      normalizeDeviceLabel(device.label).includes(BROWSER_CAPTURE_DEVICE),
+      matchesBrowserCaptureDevice(device.label),
     );
 
     if (captureDevice) {
@@ -191,7 +203,7 @@ const useSpeechToTextExternal = (
     });
     const stream = await requestAudioStream();
     const track = stream.getAudioTracks()[0];
-    if (track?.label && !normalizeDeviceLabel(track.label).includes(BROWSER_CAPTURE_DEVICE)) {
+    if (track?.label && !matchesBrowserCaptureDevice(track.label)) {
       stream.getTracks().forEach((item) => item.stop());
       throw new DOMException('Browser capture device not selected', 'NotFoundError');
     }
@@ -222,6 +234,15 @@ const useSpeechToTextExternal = (
     const audioChunks = audioChunksRef.current;
     audioChunksRef.current = [];
     cleanupMedia();
+
+    if (source === 'browser' && pendingSwitchDeviceRef.current) {
+      // A device switch was requested mid-capture: discard the in-flight audio
+      // and restart the browser capture on the newly selected device.
+      pendingSwitchDeviceRef.current = null;
+      resetBusyState();
+      void startRecording('browser');
+      return;
+    }
 
     if (discardRecordingRef.current) {
       return;
@@ -349,6 +370,91 @@ const useSpeechToTextExternal = (
     }
   };
 
+  const listBrowserCaptureDevices = async (): Promise<BrowserCaptureDevice[]> => {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    return devices
+      .filter(
+        (device) => device.kind === 'audioinput' && matchesBrowserCaptureDevice(device.label),
+      )
+      .map((device) => ({ deviceId: device.deviceId, label: device.label }));
+  };
+
+  const refreshBrowserCaptureDevices = async () => {
+    try {
+      const captureDevices = await listBrowserCaptureDevices();
+      if (mountedRef.current) {
+        setBrowserCaptureDevices(captureDevices);
+      }
+    } catch {
+      /* enumeration failures are non-fatal for the selector */
+    }
+  };
+
+  const loadBrowserCaptureDevices = async () => {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const hasLabels = devices.some(
+        (device) => device.kind === 'audioinput' && device.label !== '',
+      );
+      if (!hasLabels) {
+        /**
+         * Device labels stay hidden until microphone access is granted for this
+         * page load, so we cannot filter by the librechat_ prefix yet. Probe for
+         * permission once (this shows Firefox's native prompt), then release the
+         * stream and re-enumerate now that labels are exposed.
+         */
+        const probe = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        probe.getTracks().forEach((track) => track.stop());
+      }
+      await refreshBrowserCaptureDevices();
+    } catch (error) {
+      handleCaptureError(error instanceof Error ? error : new Error(String(error)));
+    }
+  };
+
+  const selectBrowserCaptureDevice = async (deviceId: string) => {
+    localStorage.setItem(BROWSER_CAPTURE_DEVICE_KEY, deviceId);
+    if (mountedRef.current) {
+      setSelectedBrowserCaptureDeviceId(deviceId);
+    }
+
+    if (recordingSourceRef.current === 'browser') {
+      /**
+       * Switch on the go: stop the in-flight capture and let finishRecording
+       * restart the browser recording on the newly selected device.
+       */
+      pendingSwitchDeviceRef.current = deviceId;
+      stopRecording('browser');
+      return;
+    }
+
+    /**
+     * Not recording (variant A): only arm the device. Acquiring the stream now
+     * makes Firefox prompt for access when this device has not been granted
+     * yet; we immediately release it so no hot mic stays open.
+     */
+    try {
+      const stream = await requestAudioStream(deviceId);
+      stream.getTracks().forEach((track) => track.stop());
+      await refreshBrowserCaptureDevices();
+    } catch (error) {
+      handleCaptureError(error instanceof Error ? error : new Error(String(error)));
+    }
+  };
+
+  useEffect(() => {
+    const mediaDevices = navigator.mediaDevices;
+    if (!mediaDevices?.addEventListener) {
+      return;
+    }
+    const handleDeviceChange = () => {
+      void refreshBrowserCaptureDevices();
+    };
+    mediaDevices.addEventListener('devicechange', handleDeviceChange);
+    return () => mediaDevices.removeEventListener('devicechange', handleDeviceChange);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(
     () => () => {
       mountedRef.current = false;
@@ -380,6 +486,10 @@ const useSpeechToTextExternal = (
     isBrowserAudioLoading: requestingSource === 'browser' || finalizingSource === 'browser',
     startBrowserAudioRecording: () => startRecording('browser'),
     stopBrowserAudioRecording: () => stopRecording('browser'),
+    browserCaptureDevices,
+    selectedBrowserCaptureDeviceId,
+    loadBrowserCaptureDevices,
+    selectBrowserCaptureDevice,
   };
 };
 

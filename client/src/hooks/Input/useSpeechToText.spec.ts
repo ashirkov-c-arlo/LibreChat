@@ -11,6 +11,8 @@ const mockStartSpeechRecordingExternal = jest.fn();
 const mockStopSpeechRecordingExternal = jest.fn();
 const mockStartBrowserAudioRecording = jest.fn();
 const mockStopBrowserAudioRecording = jest.fn();
+const mockLoadBrowserCaptureDevices = jest.fn();
+const mockSelectBrowserCaptureDevice = jest.fn();
 
 jest.mock('./useGetAudioSettings', () => ({
   __esModule: true,
@@ -38,6 +40,10 @@ jest.mock('./useSpeechToTextExternal', () => ({
     isBrowserAudioLoading: false,
     startBrowserAudioRecording: mockStartBrowserAudioRecording,
     stopBrowserAudioRecording: mockStopBrowserAudioRecording,
+    browserCaptureDevices: [],
+    selectedBrowserCaptureDeviceId: null,
+    loadBrowserCaptureDevices: mockLoadBrowserCaptureDevices,
+    selectBrowserCaptureDevice: mockSelectBrowserCaptureDevice,
   }),
 }));
 
