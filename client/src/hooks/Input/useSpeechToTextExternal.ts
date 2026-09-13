@@ -8,6 +8,7 @@ import store from '~/store';
 type RecordingSource = 'microphone' | 'browser';
 
 type BrowserCaptureDevice = { deviceId: string; label: string };
+type AudioInputDevice = Pick<MediaDeviceInfo, 'deviceId' | 'kind' | 'label'>;
 
 const BROWSER_CAPTURE_PREFIX = 'librechat_';
 const BROWSER_CAPTURE_DEVICE_KEY = 'librechatBrowserCaptureDeviceId';
@@ -55,6 +56,17 @@ const normalizeDeviceLabel = (label: string) => label.toLowerCase().replace(/[^a
 
 const matchesBrowserCaptureDevice = (label: string) =>
   normalizeDeviceLabel(label).startsWith(BROWSER_CAPTURE_PREFIX);
+
+const isLibreChatCaptureDevice = (label: string) =>
+  normalizeDeviceLabel(label).includes(BROWSER_CAPTURE_PREFIX);
+
+export const findPhysicalMicrophone = (devices: AudioInputDevice[]) =>
+  devices.find(
+    (device) =>
+      device.kind === 'audioinput' &&
+      device.label !== '' &&
+      !isLibreChatCaptureDevice(device.label),
+  );
 
 const isMissingDeviceError = (error: Error) =>
   error.name === 'NotFoundError' || error.name === 'OverconstrainedError';
@@ -163,6 +175,32 @@ const useSpeechToTextExternal = (
       video: false,
     });
 
+  const requestMicrophoneStream = (deviceId?: string) =>
+    navigator.mediaDevices.getUserMedia({
+      audio: deviceId ? { deviceId: { exact: deviceId } } : true,
+      video: false,
+    });
+
+  const getMicrophoneStream = async () => {
+    let microphone = findPhysicalMicrophone(await navigator.mediaDevices.enumerateDevices());
+    if (microphone) {
+      return requestMicrophoneStream(microphone.deviceId);
+    }
+
+    const stream = await requestMicrophoneStream();
+    const track = stream.getAudioTracks()[0];
+    if (!track?.label || !isLibreChatCaptureDevice(track.label)) {
+      return stream;
+    }
+
+    stream.getTracks().forEach((item) => item.stop());
+    microphone = findPhysicalMicrophone(await navigator.mediaDevices.enumerateDevices());
+    if (!microphone) {
+      throw new DOMException('Physical microphone not found', 'NotFoundError');
+    }
+    return requestMicrophoneStream(microphone.deviceId);
+  };
+
   const saveBrowserCaptureDevice = (stream: MediaStream) => {
     const deviceId = stream.getAudioTracks()[0]?.getSettings().deviceId;
     if (deviceId) {
@@ -186,9 +224,7 @@ const useSpeechToTextExternal = (
 
     const devices = await navigator.mediaDevices.enumerateDevices();
     const audioInputs = devices.filter((device) => device.kind === 'audioinput');
-    const captureDevice = audioInputs.find((device) =>
-      matchesBrowserCaptureDevice(device.label),
-    );
+    const captureDevice = audioInputs.find((device) => matchesBrowserCaptureDevice(device.label));
 
     if (captureDevice) {
       return saveBrowserCaptureDevice(await requestAudioStream(captureDevice.deviceId));
@@ -214,7 +250,7 @@ const useSpeechToTextExternal = (
     if (source === 'browser') {
       return getBrowserCaptureStream();
     }
-    return navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    return getMicrophoneStream();
   };
 
   const handleCaptureError = (error: Error) => {
@@ -373,9 +409,7 @@ const useSpeechToTextExternal = (
   const listBrowserCaptureDevices = async (): Promise<BrowserCaptureDevice[]> => {
     const devices = await navigator.mediaDevices.enumerateDevices();
     return devices
-      .filter(
-        (device) => device.kind === 'audioinput' && matchesBrowserCaptureDevice(device.label),
-      )
+      .filter((device) => device.kind === 'audioinput' && matchesBrowserCaptureDevice(device.label))
       .map((device) => ({ deviceId: device.deviceId, label: device.label }));
   };
 
