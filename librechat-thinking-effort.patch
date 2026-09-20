@@ -1,0 +1,608 @@
+diff --git a/client/src/components/Chat/Input/ChatForm.tsx b/client/src/components/Chat/Input/ChatForm.tsx
+index fe5767871..e1e4007f1 100644
+--- a/client/src/components/Chat/Input/ChatForm.tsx
++++ b/client/src/components/Chat/Input/ChatForm.tsx
+@@ -38,6 +38,7 @@ import FileFormChat from './Files/FileFormChat';
+ import InFlightSteers from './InFlightSteers';
+ import TextareaHeader from './TextareaHeader';
+ import PromptsCommand from './PromptsCommand';
++import ThinkingEffort from './ThinkingEffort';
+ import SkillsCommand from './SkillsCommand';
+ import AudioRecorder from './AudioRecorder';
+ import CollapseChat from './CollapseChat';
+@@ -669,6 +670,7 @@ const ChatForm = memo(function ChatForm({
+                   }
+                 />
+                 <div className="mx-auto flex" />
++                <ThinkingEffort />
+                 <TokenUsage index={index} conversation={conversation} isSubmitting={isSubmitting} />
+                 {SpeechToText && (
+                   <AudioRecorder
+diff --git a/client/src/components/Chat/Input/ThinkingEffort.tsx b/client/src/components/Chat/Input/ThinkingEffort.tsx
+new file mode 100644
+index 000000000..e94d34d2b
+--- /dev/null
++++ b/client/src/components/Chat/Input/ThinkingEffort.tsx
+@@ -0,0 +1,113 @@
++import { memo, useEffect, useMemo } from 'react';
++import * as Ariakit from '@ariakit/react';
++import { TooltipAnchor } from '@librechat/client';
++import { Brain, Check, ChevronDown } from 'lucide-react';
++import { findActiveModelSpec, resolveEffortConfig } from 'librechat-data-provider';
++import type { EffortValue } from 'librechat-data-provider';
++import type { TranslationKeys } from '~/hooks';
++import { useSetIndexOptions, useLocalize } from '~/hooks';
++import { useGetStartupConfig } from '~/data-provider';
++import { useChatContext } from '~/Providers';
++import { cn } from '~/utils';
++
++/** Explicit map: dynamic key construction would defeat the typed key check. */
++const effortLabelKeys: Record<EffortValue, TranslationKeys> = {
++  low: 'com_ui_thinking_effort_low',
++  medium: 'com_ui_thinking_effort_medium',
++  high: 'com_ui_thinking_effort_high',
++  max: 'com_ui_thinking_effort_max',
++  xhigh: 'com_ui_thinking_effort_xhigh',
++};
++
++const TRIGGER_CLASS =
++  'flex h-theme-control shrink-0 items-center gap-1 rounded-theme-control-round px-2 text-sm text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-text-primary aria-disabled:cursor-not-allowed aria-disabled:opacity-50';
++const MENU_CLASS =
++  'z-[200] min-w-[9rem] rounded-xl border border-border-light bg-surface-secondary p-1.5 text-text-primary shadow-lg outline-none';
++const MENU_ITEM_CLASS =
++  'flex w-full cursor-pointer items-center justify-between gap-3 rounded-lg px-2 py-1.5 text-sm text-text-primary data-[active-item]:bg-surface-tertiary';
++
++function ThinkingEffortSelector() {
++  const localize = useLocalize();
++  const { data: startupConfig } = useGetStartupConfig();
++  /** Read the conversation from context, not from a prop: ChatForm passes a
++   *  `stableConversation` memo whose dependency allowlist omits the effort
++   *  params, so a prop would stay frozen on the value selected here. */
++  const { conversation, isSubmitting } = useChatContext();
++  const { setOption } = useSetIndexOptions();
++  const menu = Ariakit.useMenuStore({ placement: 'top-start', focusLoop: true });
++
++  const modelSpec = useMemo(
++    () => findActiveModelSpec(startupConfig?.modelSpecs?.list, conversation),
++    [startupConfig?.modelSpecs?.list, conversation],
++  );
++  const resolved = useMemo(
++    () => resolveEffortConfig(modelSpec, conversation),
++    [modelSpec, conversation],
++  );
++
++  const field = resolved?.field;
++  const selectedValue = resolved?.selectedValue;
++  const storedValue = field == null ? undefined : conversation?.[field];
++
++  /** Persist the resolved value whenever it diverges from what the conversation
++   *  holds: seeds the preset default on a new chat, and repairs a value the
++   *  newly-selected model does not offer (or carries a supported one across
++   *  from the sibling field). Guarded by equality, so this settles in one pass. */
++  useEffect(() => {
++    if (field == null || selectedValue == null || storedValue === selectedValue) {
++      return;
++    }
++    setOption(field)(selectedValue);
++  }, [field, selectedValue, storedValue, setOption]);
++
++  if (resolved == null || startupConfig?.interface?.parameters === false) {
++    return null;
++  }
++
++  const label = localize(effortLabelKeys[resolved.selectedValue]);
++  const controlLabel = localize('com_ui_thinking_effort');
++
++  return (
++    <>
++      <TooltipAnchor
++        description={`${controlLabel}: ${label}`}
++        side="top"
++        render={
++          <Ariakit.MenuButton
++            store={menu}
++            type="button"
++            data-testid="thinking-effort"
++            aria-label={controlLabel}
++            disabled={isSubmitting}
++            className={cn(TRIGGER_CLASS)}
++          >
++            <Brain className="size-4 shrink-0" aria-hidden="true" />
++            <span className="truncate">{label}</span>
++            <ChevronDown className="size-3 shrink-0 opacity-60" aria-hidden="true" />
++          </Ariakit.MenuButton>
++        }
++      />
++      <Ariakit.Menu store={menu} portal gutter={6} aria-label={controlLabel} className={MENU_CLASS}>
++        {resolved.options.map((option) => (
++          <Ariakit.MenuItem
++            key={option}
++            className={MENU_ITEM_CLASS}
++            aria-checked={option === resolved.selectedValue}
++            role="menuitemradio"
++            onClick={() => {
++              setOption(resolved.field)(option);
++              menu.hide();
++            }}
++          >
++            <span>{localize(effortLabelKeys[option])}</span>
++            {option === resolved.selectedValue && (
++              <Check className="size-4 shrink-0" aria-hidden="true" />
++            )}
++          </Ariakit.MenuItem>
++        ))}
++      </Ariakit.Menu>
++    </>
++  );
++}
++
++export default memo(ThinkingEffortSelector);
+diff --git a/client/src/locales/en/translation.json b/client/src/locales/en/translation.json
+index e816dd43b..e42b2832c 100644
+--- a/client/src/locales/en/translation.json
++++ b/client/src/locales/en/translation.json
+@@ -2237,5 +2237,11 @@
+   "com_ui_zoom_in": "Zoom in",
+   "com_ui_zoom_level": "Zoom level",
+   "com_ui_zoom_out": "Zoom out",
+-  "com_user_message": "You"
++  "com_user_message": "You",
++  "com_ui_thinking_effort": "Thinking effort",
++  "com_ui_thinking_effort_low": "Low",
++  "com_ui_thinking_effort_medium": "Medium",
++  "com_ui_thinking_effort_high": "High",
++  "com_ui_thinking_effort_max": "Max",
++  "com_ui_thinking_effort_xhigh": "XHigh"
+ }
+diff --git a/client/src/locales/ru/translation.json b/client/src/locales/ru/translation.json
+index 82cf1d9e0..fd5eca599 100644
+--- a/client/src/locales/ru/translation.json
++++ b/client/src/locales/ru/translation.json
+@@ -1215,6 +1215,12 @@
+   "com_ui_terms_and_conditions": "Условия использования",
+   "com_ui_terms_of_service": "Условия использования",
+   "com_ui_thinking": "Рассуждаю...",
++  "com_ui_thinking_effort": "Уровень рассуждения",
++  "com_ui_thinking_effort_high": "Высокий",
++  "com_ui_thinking_effort_low": "Низкий",
++  "com_ui_thinking_effort_max": "Максимальный",
++  "com_ui_thinking_effort_medium": "Средний",
++  "com_ui_thinking_effort_xhigh": "Сверхвысокий",
+   "com_ui_thoughts": "Мысли",
+   "com_ui_token": "токен",
+   "com_ui_token_exchange_method": "Метод обмена токена",
+diff --git a/packages/data-provider/specs/effort.spec.ts b/packages/data-provider/specs/effort.spec.ts
+new file mode 100644
+index 000000000..20bf2b4fa
+--- /dev/null
++++ b/packages/data-provider/specs/effort.spec.ts
+@@ -0,0 +1,216 @@
++import { findActiveModelSpec, resolveEffortConfig } from '../src/effort';
++import { specsConfigSchema } from '../src/models';
++import type { EffortField, EffortValue, TModelSpec } from '../src/models';
++
++const CLAUDE_OPTIONS: EffortValue[] = ['low', 'medium', 'high', 'max'];
++const GPT_OPTIONS: EffortValue[] = ['low', 'medium', 'high', 'xhigh'];
++const OSS_OPTIONS: EffortValue[] = ['low', 'medium', 'high'];
++
++const spec = (
++  name: string,
++  field: EffortField,
++  options: EffortValue[],
++  model: string,
++  endpoint = 'bedrock',
++): TModelSpec =>
++  ({
++    name,
++    label: name,
++    effortSelector: { field, options },
++    preset: { endpoint, model, [field]: 'medium' },
++  }) as unknown as TModelSpec;
++
++const bare = (name: string, model: string): TModelSpec =>
++  ({ name, label: name, preset: { endpoint: 'bedrock', model } }) as unknown as TModelSpec;
++
++const specs: TModelSpec[] = [
++  spec('opus-5', 'effort', CLAUDE_OPTIONS, 'us.anthropic.claude-opus-5'),
++  spec('sonnet-5', 'effort', CLAUDE_OPTIONS, 'us.anthropic.claude-sonnet-5'),
++  spec('opus-4-6', 'effort', CLAUDE_OPTIONS, 'us.anthropic.claude-opus-4-6-v1'),
++  spec('gpt-5.6-sol', 'reasoning_effort', GPT_OPTIONS, 'openai.gpt-5.6-sol', 'Bedrock-OpenAI'),
++  spec('gpt-5.6-luna', 'reasoning_effort', GPT_OPTIONS, 'openai.gpt-5.6-luna', 'Bedrock-OpenAI'),
++  spec('glm-5', 'reasoning_effort', OSS_OPTIONS, 'zai.glm-5'),
++  spec('kimi-k2-5', 'reasoning_effort', OSS_OPTIONS, 'moonshotai.kimi-k2.5'),
++  bare('qwen3-235b', 'qwen.qwen3-235b-a22b-2507-v1:0'),
++  bare('qwen3-vl', 'qwen.qwen3-vl-235b-a22b'),
++];
++
++const byName = (name: string) => specs.find((s) => s.name === name);
++
++describe('resolveEffortConfig', () => {
++  it.each([
++    ['opus-5', 'effort', CLAUDE_OPTIONS],
++    ['sonnet-5', 'effort', CLAUDE_OPTIONS],
++    ['opus-4-6', 'effort', CLAUDE_OPTIONS],
++    ['gpt-5.6-sol', 'reasoning_effort', GPT_OPTIONS],
++    ['gpt-5.6-luna', 'reasoning_effort', GPT_OPTIONS],
++    ['glm-5', 'reasoning_effort', OSS_OPTIONS],
++    ['kimi-k2-5', 'reasoning_effort', OSS_OPTIONS],
++  ] as [string, EffortField, EffortValue[]][])(
++    '%s defaults to medium on a new conversation',
++    (name, field, options) => {
++      expect(resolveEffortConfig(byName(name), {})).toEqual({
++        field,
++        options,
++        defaultValue: 'medium',
++        selectedValue: 'medium',
++      });
++    },
++  );
++
++  it.each(['qwen3-235b', 'qwen3-vl'])('returns null for %s (no effortSelector)', (name) => {
++    expect(resolveEffortConfig(byName(name), {})).toBeNull();
++  });
++
++  it('returns null for a missing spec', () => {
++    expect(resolveEffortConfig(undefined, { effort: 'high' })).toBeNull();
++  });
++
++  it('keeps a stored value that the spec offers', () => {
++    expect(resolveEffortConfig(byName('sonnet-5'), { effort: 'high' })?.selectedValue).toBe('high');
++  });
++
++  it('falls back to the preset default when the stored value is not offered', () => {
++    expect(resolveEffortConfig(byName('glm-5'), { reasoning_effort: 'xhigh' })?.selectedValue).toBe(
++      'medium',
++    );
++  });
++
++  it('falls back to the first option when the preset default is invalid', () => {
++    const broken = {
++      effortSelector: { field: 'effort' as EffortField, options: ['low', 'high'] as EffortValue[] },
++      preset: { effort: 'nope' },
++    };
++    expect(resolveEffortConfig(broken, {})?.selectedValue).toBe('low');
++  });
++
++  describe('model switching', () => {
++    it('carries a supported value across effort families', () => {
++      expect(resolveEffortConfig(byName('gpt-5.6-luna'), { effort: 'high' })?.selectedValue).toBe(
++        'high',
++      );
++      expect(
++        resolveEffortConfig(byName('glm-5'), { reasoning_effort: 'high' })?.selectedValue,
++      ).toBe('high');
++    });
++
++    it('falls back when the carried value is unsupported', () => {
++      expect(resolveEffortConfig(byName('gpt-5.6-luna'), { effort: 'max' })?.selectedValue).toBe(
++        'medium',
++      );
++      expect(
++        resolveEffortConfig(byName('sonnet-5'), { reasoning_effort: 'xhigh' })?.selectedValue,
++      ).toBe('medium');
++    });
++
++    it('hides on Qwen and restores the value on return', () => {
++      const params = { reasoning_effort: 'xhigh' };
++      expect(resolveEffortConfig(byName('qwen3-vl'), params)).toBeNull();
++      expect(resolveEffortConfig(byName('gpt-5.6-luna'), params)?.selectedValue).toBe('xhigh');
++    });
++
++    it('uses the new default when nothing is stored', () => {
++      expect(resolveEffortConfig(byName('kimi-k2-5'), {})?.selectedValue).toBe('medium');
++    });
++  });
++});
++
++describe('findActiveModelSpec', () => {
++  it('resolves by spec name', () => {
++    expect(findActiveModelSpec(specs, { spec: 'glm-5' })?.name).toBe('glm-5');
++  });
++
++  it('resolves by exact endpoint and model', () => {
++    expect(
++      findActiveModelSpec(specs, { endpoint: 'Bedrock-OpenAI', model: 'openai.gpt-5.6-sol' })?.name,
++    ).toBe('gpt-5.6-sol');
++  });
++
++  it('never resolves by label', () => {
++    expect(findActiveModelSpec(specs, { spec: 'GLM-5' })).toBeUndefined();
++  });
++
++  it('does not match on endpoint alone', () => {
++    expect(findActiveModelSpec(specs, { endpoint: 'bedrock' })).toBeUndefined();
++  });
++});
++
++describe('effortSelector config validation', () => {
++  const parse = (spec: unknown) => specsConfigSchema.safeParse({ list: [spec] });
++
++  it('accepts a valid Claude selector and passes metadata through', () => {
++    const result = parse(byName('opus-5'));
++    expect(result.success).toBe(true);
++    if (result.success) {
++      expect(result.data.list[0].effortSelector).toEqual({
++        field: 'effort',
++        options: CLAUDE_OPTIONS,
++      });
++    }
++  });
++
++  it('accepts specs without a selector', () => {
++    expect(parse(byName('qwen3-vl')).success).toBe(true);
++  });
++
++  it.each([
++    [
++      'a preset default outside options',
++      {
++        name: 'bad-default',
++        label: 'x',
++        effortSelector: { field: 'reasoning_effort', options: OSS_OPTIONS },
++        preset: { endpoint: 'bedrock', model: 'zai.glm-5', reasoning_effort: 'xhigh' },
++      },
++      'must be one of effortSelector.options',
++    ],
++    [
++      'a missing preset default',
++      {
++        name: 'no-default',
++        label: 'x',
++        effortSelector: { field: 'effort', options: CLAUDE_OPTIONS },
++        preset: { endpoint: 'bedrock', model: 'm' },
++      },
++      'must be set when effortSelector.field',
++    ],
++    [
++      'duplicate options',
++      {
++        name: 'dupes',
++        label: 'x',
++        effortSelector: { field: 'effort', options: ['low', 'low'] },
++        preset: { endpoint: 'bedrock', model: 'm', effort: 'low' },
++      },
++      'must not contain duplicates',
++    ],
++  ])('rejects %s', (_case, spec, message) => {
++    const result = parse(spec);
++    expect(result.success).toBe(false);
++    if (!result.success) {
++      expect(result.error.issues.some((issue) => issue.message.includes(message))).toBe(true);
++    }
++  });
++
++  it('rejects an empty options list', () => {
++    expect(
++      parse({
++        name: 'empty',
++        label: 'x',
++        effortSelector: { field: 'effort', options: [] },
++        preset: { endpoint: 'bedrock', model: 'm', effort: 'low' },
++      }).success,
++    ).toBe(false);
++  });
++
++  it('rejects an unknown field name', () => {
++    expect(
++      parse({
++        name: 'bad-field',
++        label: 'x',
++        effortSelector: { field: 'thinkingEffort', options: ['low'] },
++        preset: { endpoint: 'bedrock', model: 'm' },
++      }).success,
++    ).toBe(false);
++  });
++});
+diff --git a/packages/data-provider/src/effort.ts b/packages/data-provider/src/effort.ts
+new file mode 100644
+index 000000000..902218a86
+--- /dev/null
++++ b/packages/data-provider/src/effort.ts
+@@ -0,0 +1,105 @@
++import type { EffortField, EffortValue, EffortSelectorConfig, TModelSpec } from './models';
++import { effortValues } from './models';
++
++export type ResolvedEffortConfig = {
++  field: EffortField;
++  options: EffortValue[];
++  defaultValue: EffortValue;
++  selectedValue: EffortValue;
++};
++
++/** The sibling param a spec of the opposite family writes to. Used only to
++ *  carry a user's choice across a model switch; never written alongside. */
++const siblingField: Record<EffortField, EffortField> = {
++  effort: 'reasoning_effort',
++  reasoning_effort: 'effort',
++};
++
++const effortValueSet = new Set<string>(effortValues);
++
++export function isEffortValue(value: unknown): value is EffortValue {
++  return typeof value === 'string' && effortValueSet.has(value);
++}
++
++/** Structural params so `TConversation`, `TPreset` and `TModelSpecPreset` all
++ *  satisfy them without a cast at the call site. */
++type EffortParams = {
++  effort?: unknown;
++  reasoning_effort?: unknown;
++};
++
++type EffortSpec = {
++  effortSelector?: EffortSelectorConfig;
++  preset?: EffortParams | null;
++};
++
++/**
++ * Resolves the effort control state for the active modelSpec.
++ *
++ * `params` is the conversation (or preset) the value is read from. Precedence:
++ *   1. the spec's own field, when its value is offered by this spec
++ *   2. the sibling field, when its value is offered by this spec — this is what
++ *      makes `Claude/high -> GPT/high` carry over while `Claude/max -> GPT`
++ *      falls back, since `max` is not a GPT option
++ *   3. `preset[field]`, the single source of the default
++ *
++ * Returns `null` when the spec opts out (no `effortSelector`), which is the
++ * signal for the UI to render nothing and for callers to touch no effort field.
++ */
++export function resolveEffortConfig(
++  modelSpec?: EffortSpec | null,
++  params?: EffortParams | null,
++): ResolvedEffortConfig | null {
++  const selector = modelSpec?.effortSelector;
++  if (!selector) {
++    return null;
++  }
++
++  const { field, options } = selector;
++  const presetDefault = modelSpec?.preset?.[field];
++  /** Config validation guarantees this, but public config is not re-validated
++   *  client-side; fall back to the first option rather than rendering empty. */
++  const defaultValue: EffortValue = isEffortValue(presetDefault)
++    ? presetDefault
++    : (options[0] as EffortValue);
++
++  const current = params?.[field];
++  if (isEffortValue(current) && options.includes(current)) {
++    return { field, options, defaultValue, selectedValue: current };
++  }
++
++  const carried = params?.[siblingField[field]];
++  if (isEffortValue(carried) && options.includes(carried)) {
++    return { field, options, defaultValue, selectedValue: carried };
++  }
++
++  return { field, options, defaultValue, selectedValue: defaultValue };
++}
++
++/**
++ * Resolves the active spec by stable identity: the persisted spec name first,
++ * then an exact endpoint + provider model match. Labels are never matched.
++ */
++export function findActiveModelSpec(
++  specs?: TModelSpec[] | null,
++  params?: { spec?: string | null; endpoint?: string | null; model?: string | null } | null,
++): TModelSpec | undefined {
++  if (!specs?.length || !params) {
++    return undefined;
++  }
++
++  const specName = params.spec;
++  if (specName != null && specName !== '') {
++    const byName = specs.find((spec) => spec.name === specName);
++    if (byName) {
++      return byName;
++    }
++  }
++
++  const { endpoint, model } = params;
++  if (endpoint == null || endpoint === '' || model == null || model === '') {
++    return undefined;
++  }
++
++  return specs.find((spec) => spec.preset?.endpoint === endpoint && spec.preset?.model === model);
++}
+diff --git a/packages/data-provider/src/index.ts b/packages/data-provider/src/index.ts
+index 7ecaf4ba8..c6f446391 100644
+--- a/packages/data-provider/src/index.ts
++++ b/packages/data-provider/src/index.ts
+@@ -13,6 +13,7 @@ export * from './parsers';
+ /* custom/dynamic configurations  */
+ export * from './generate';
+ export * from './models';
++export * from './effort';
+ /* mcp */
+ export * from './mcp';
+ /* RBAC */
+diff --git a/packages/data-provider/src/models.ts b/packages/data-provider/src/models.ts
+index 1659b7bd0..329139a7a 100644
+--- a/packages/data-provider/src/models.ts
++++ b/packages/data-provider/src/models.ts
+@@ -80,8 +80,31 @@ export type TModelSpec = {
+   mcpServers?: string[];
+   skills?: boolean | string[];
+   subagents?: AgentSubagentsConfig;
++  effortSelector?: EffortSelectorConfig;
+ };
+ 
++export const effortValues = ['low', 'medium', 'high', 'max', 'xhigh'] as const;
++export type EffortValue = (typeof effortValues)[number];
++
++export const effortFields = ['effort', 'reasoning_effort'] as const;
++export type EffortField = (typeof effortFields)[number];
++
++export type EffortSelectorConfig = {
++  field: EffortField;
++  options: EffortValue[];
++};
++
++/**
++ * UI metadata: opts a modelSpec into the inline composer thinking-effort
++ * selector. `field` names the existing conversation/provider param the choice
++ * is written to; `options` restricts the values offered for this spec. The
++ * default is the spec's own `preset[field]` - there is no separate default key.
++ */
++export const effortSelectorSchema = z.object({
++  field: z.enum(effortFields),
++  options: z.array(z.enum(effortValues)).min(1),
++});
++
+ export const modelSpecSubagentsSchema = z.object({
+   enabled: z.boolean().optional(),
+   allowSelf: z.boolean().optional(),
+@@ -117,13 +140,47 @@ export const tModelSpecSchema = z.object({
+   mcpServers: z.array(z.string()).optional(),
+   skills: z.union([z.boolean(), z.array(z.string())]).optional(),
+   subagents: modelSpecSubagentsSchema.optional(),
++  effortSelector: effortSelectorSchema.optional(),
+ });
+ 
+-export const specsConfigSchema = z.object({
+-  enforce: z.boolean().default(false),
+-  prioritize: z.boolean().default(true),
+-  list: z.array(tModelSpecSchema).default([]),
+-  addedEndpoints: z.array(z.union([z.string(), eModelEndpointSchema])).optional(),
+-});
++export const specsConfigSchema = z
++  .object({
++    enforce: z.boolean().default(false),
++    prioritize: z.boolean().default(true),
++    list: z.array(tModelSpecSchema).default([]),
++    addedEndpoints: z.array(z.union([z.string(), eModelEndpointSchema])).optional(),
++  })
++  .superRefine((config, ctx) => {
++    config.list?.forEach((spec, index) => {
++      const selector = spec.effortSelector;
++      if (!selector) {
++        return;
++      }
++
++      const addIssue = (message: string, key = 'effortSelector') =>
++        ctx.addIssue({
++          code: z.ZodIssueCode.custom,
++          path: ['list', index, key],
++          message: `modelSpec "${spec.name}": ${message}`,
++        });
++
++      if (new Set(selector.options).size !== selector.options.length) {
++        addIssue('effortSelector.options must not contain duplicates');
++      }
++
++      const presetDefault = (spec.preset as Record<string, unknown> | undefined)?.[selector.field];
++      if (presetDefault == null || presetDefault === '') {
++        addIssue(
++          `preset.${selector.field} must be set when effortSelector.field is "${selector.field}"`,
++          'preset',
++        );
++        return;
++      }
++
++      if (!selector.options.includes(presetDefault as EffortValue)) {
++        addIssue(`preset.${selector.field} must be one of effortSelector.options`, 'preset');
++      }
++    });
++  });
+ 
+ export type TSpecsConfig = z.infer<typeof specsConfigSchema>;

@@ -1,0 +1,64 @@
+From a2a71ed7004f1331ee4222e9d334361c4d15b73d Mon Sep 17 00:00:00 2001
+From: Alexander Shirkov <ashirkov.c@arlo.com>
+Date: Wed, 26 Aug 2026 13:15:30 +0000
+Subject: [PATCH] fix: strip Responses API flag from Bedrock requests
+
+---
+ packages/data-provider/specs/bedrock.spec.ts | 20 ++++++++++++++++++++
+ packages/data-provider/src/bedrock.ts        |  4 +++-
+ 2 files changed, 23 insertions(+), 1 deletion(-)
+
+diff --git a/packages/data-provider/specs/bedrock.spec.ts b/packages/data-provider/specs/bedrock.spec.ts
+index a31265957..bba6f51d1 100644
+--- a/packages/data-provider/specs/bedrock.spec.ts
++++ b/packages/data-provider/specs/bedrock.spec.ts
+@@ -1567,6 +1567,26 @@ describe('bedrockInputParser', () => {
+   });
+ 
+   describe('Model switching cleanup', () => {
++    test.each([
++      ['top-level', { useResponsesApi: true }],
++      ['additionalModelRequestFields', { additionalModelRequestFields: { useResponsesApi: true } }],
++    ])('should strip stale OpenAI useResponsesApi from %s', (_source, staleParameters) => {
++      const parsed = bedrockInputParser.parse({
++        model: 'us.anthropic.claude-opus-5',
++        effort: 'high',
++        ...staleParameters,
++      }) as Record<string, unknown>;
++      const parsedAmrf = parsed.additionalModelRequestFields as Record<string, unknown> | undefined;
++
++      expect(parsed.useResponsesApi).toBeUndefined();
++      expect(parsedAmrf?.useResponsesApi).toBeUndefined();
++
++      const output = bedrockOutputParser(parsed);
++      const outputAmrf = output.additionalModelRequestFields as Record<string, unknown> | undefined;
++      expect(output.useResponsesApi).toBeUndefined();
++      expect(outputAmrf?.useResponsesApi).toBeUndefined();
++    });
++
+     test('should strip anthropic_beta when switching from Anthropic to non-Anthropic model', () => {
+       const staleConversationData = {
+         model: 'openai.gpt-oss-120b-1:0',
+diff --git a/packages/data-provider/src/bedrock.ts b/packages/data-provider/src/bedrock.ts
+index 12e444f25..80cf5be23 100644
+--- a/packages/data-provider/src/bedrock.ts
++++ b/packages/data-provider/src/bedrock.ts
+@@ -651,12 +651,14 @@ export const bedrockInputParser = s.tConversationSchema
+     const isAnthropicModel =
+       typeof typedData.model === 'string' && isBedrockClaudeModel(typedData.model);
+ 
+-    /** Strip stale fields from previously-persisted additionalModelRequestFields */
++    /** Strip stale provider-specific fields from switched and persisted model parameters */
++    delete additionalFields.useResponsesApi;
+     if (
+       typeof typedData.additionalModelRequestFields === 'object' &&
+       typedData.additionalModelRequestFields != null
+     ) {
+       const amrf = typedData.additionalModelRequestFields as Record<string, unknown>;
++      delete amrf.useResponsesApi;
+       if (!isAnthropicModel) {
+         delete amrf.anthropic_beta;
+         delete amrf.thinking;
+-- 
+2.47.3
+

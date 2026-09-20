@@ -1,0 +1,37 @@
+diff --git a/client/src/components/Chat/Input/ThinkingEffort.tsx b/client/src/components/Chat/Input/ThinkingEffort.tsx
+index 64656d9..de0c499 100644
+--- a/client/src/components/Chat/Input/ThinkingEffort.tsx
++++ b/client/src/components/Chat/Input/ThinkingEffort.tsx
+@@ -53,10 +53,24 @@ function ThinkingEffortSelector({ conversation, isSubmitting }: ThinkingEffortPr
+    *  holds: seeds the preset default on a new chat, and repairs a value the
+    *  newly-selected model does not offer (or carries a supported one across
+    *  from the sibling field). Guarded by equality, so this settles in one pass. */
++  /* TEMP DEBUG - remove after diagnosis */
++  console.log('[effort-ui] render', {
++    spec: conversation?.spec,
++    model: conversation?.model,
++    matchedSpec: modelSpec?.name,
++    field,
++    storedValue,
++    selectedValue,
++    convoEffort: conversation?.effort,
++    convoReasoningEffort: conversation?.reasoning_effort,
++    conversationId: conversation?.conversationId,
++  });
++
+   useEffect(() => {
+     if (field == null || selectedValue == null || storedValue === selectedValue) {
+       return;
+     }
++    console.log('[effort-ui] reconcile write', { field, from: storedValue, to: selectedValue });
+     setOption(field)(selectedValue);
+   }, [field, selectedValue, storedValue, setOption]);
+ 
+@@ -95,6 +109,7 @@ function ThinkingEffortSelector({ conversation, isSubmitting }: ThinkingEffortPr
+             aria-checked={option === resolved.selectedValue}
+             role="menuitemradio"
+             onClick={() => {
++              console.log('[effort-ui] click', { field: resolved.field, option });
+               setOption(resolved.field)(option);
+               menu.hide();
+             }}

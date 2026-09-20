@@ -1,0 +1,47 @@
+From 3962fbe1be1c355e918cdae83f484c29c2e411dd Mon Sep 17 00:00:00 2001
+From: Alexander Shirkov <ashirkov.c@arlo.com>
+Date: Tue, 25 Aug 2026 19:39:58 +0200
+Subject: [PATCH 4/5] feat(i18n): add thinking effort labels (en, ru)
+
+---
+ client/src/locales/en/translation.json | 8 +++++++-
+ client/src/locales/ru/translation.json | 6 ++++++
+ 2 files changed, 13 insertions(+), 1 deletion(-)
+
+diff --git a/client/src/locales/en/translation.json b/client/src/locales/en/translation.json
+index e816dd43b..e42b2832c 100644
+--- a/client/src/locales/en/translation.json
++++ b/client/src/locales/en/translation.json
+@@ -2237,5 +2237,11 @@
+   "com_ui_zoom_in": "Zoom in",
+   "com_ui_zoom_level": "Zoom level",
+   "com_ui_zoom_out": "Zoom out",
+-  "com_user_message": "You"
++  "com_user_message": "You",
++  "com_ui_thinking_effort": "Thinking effort",
++  "com_ui_thinking_effort_low": "Low",
++  "com_ui_thinking_effort_medium": "Medium",
++  "com_ui_thinking_effort_high": "High",
++  "com_ui_thinking_effort_max": "Max",
++  "com_ui_thinking_effort_xhigh": "XHigh"
+ }
+diff --git a/client/src/locales/ru/translation.json b/client/src/locales/ru/translation.json
+index 82cf1d9e0..fd5eca599 100644
+--- a/client/src/locales/ru/translation.json
++++ b/client/src/locales/ru/translation.json
+@@ -1215,6 +1215,12 @@
+   "com_ui_terms_and_conditions": "Условия использования",
+   "com_ui_terms_of_service": "Условия использования",
+   "com_ui_thinking": "Рассуждаю...",
++  "com_ui_thinking_effort": "Уровень рассуждения",
++  "com_ui_thinking_effort_high": "Высокий",
++  "com_ui_thinking_effort_low": "Низкий",
++  "com_ui_thinking_effort_max": "Максимальный",
++  "com_ui_thinking_effort_medium": "Средний",
++  "com_ui_thinking_effort_xhigh": "Сверхвысокий",
+   "com_ui_thoughts": "Мысли",
+   "com_ui_token": "токен",
+   "com_ui_token_exchange_method": "Метод обмена токена",
+-- 
+2.55.0
+
