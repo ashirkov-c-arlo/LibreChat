@@ -1,0 +1,1883 @@
+diff --git a/client/src/components/Chat/Input/AudioRecorder.tsx b/client/src/components/Chat/Input/AudioRecorder.tsx
+index 3e5774b46..1ade03edd 100644
+--- a/client/src/components/Chat/Input/AudioRecorder.tsx
++++ b/client/src/components/Chat/Input/AudioRecorder.tsx
+@@ -1,18 +1,32 @@
+-import { memo, useCallback, useEffect, useRef } from 'react';
+-import { MicOff } from 'lucide-react';
++import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
++import { AudioLines, Check, ChevronDown, createLucideIcon, MicOff } from 'lucide-react';
++import * as Ariakit from '@ariakit/react';
+ import { useRecoilValue } from 'recoil';
+ import {
+   IconButton,
++  DropdownPopup,
+   useToastContext,
+   TooltipAnchor,
+   ListeningIcon,
+   Spinner,
+ } from '@librechat/client';
+ import { useLocalize, useSpeechToText, useGetAudioSettings } from '~/hooks';
+-import { globalAudioId, type TAskFunction } from '~/common';
++import { globalAudioId, type TAskFunction, type MenuItemProps } from '~/common';
+ import { useChatFormContext } from '~/Providers';
+ import store from '~/store';
+ 
++const AudioLinesOff = createLucideIcon('audio-lines-off', [
++  ['path', { d: 'M10 10v11', key: 'tkf9cx' }],
++  ['path', { d: 'M10 3v1.35', key: '1rsffz' }],
++  ['path', { d: 'M14 14v1', key: 'hsexio' }],
++  ['path', { d: 'M14 8v.35', key: 'isohmc' }],
++  ['path', { d: 'M18 5v7.35', key: '1b0cqo' }],
++  ['path', { d: 'M2 10v3', key: '1fnikh' }],
++  ['path', { d: 'm2 2 20 20', key: '1ooewy' }],
++  ['path', { d: 'M22 10v3', key: '154ddg' }],
++  ['path', { d: 'M6 6v11', key: '11sgs0' }],
++]);
++
+ const isExternalSTT = (speechToTextEndpoint: string) => speechToTextEndpoint === 'external';
+ export default memo(function AudioRecorder({
+   disabled,
+@@ -33,6 +47,7 @@ export default memo(function AudioRecorder({
+   const recorderDisabled = disabled || !speechSettingsInitialized;
+ 
+   const existingTextRef = useRef<string>('');
++  const browserAudioRef = useRef(false);
+   const isSubmittingRef = useRef(isSubmitting);
+   isSubmittingRef.current = isSubmitting;
+ 
+@@ -53,7 +68,8 @@ export default memo(function AudioRecorder({
+         }
+         /** For external STT, append existing text to the transcription */
+         const finalText =
+-          isExternalSTT(speechToTextEndpoint) && existingTextRef.current
++          (isExternalSTT(speechToTextEndpoint) || browserAudioRef.current) &&
++          existingTextRef.current
+             ? `${existingTextRef.current} ${text}`
+             : text;
+         const submitted = ask({ text: finalText });
+@@ -62,6 +78,7 @@ export default memo(function AudioRecorder({
+         }
+         reset({ text: '' });
+         existingTextRef.current = '';
++        browserAudioRef.current = false;
+       }
+     },
+     [ask, reset, showToast, localize, speechToTextEndpoint],
+@@ -84,15 +101,34 @@ export default memo(function AudioRecorder({
+     [setValue, speechToTextEndpoint],
+   );
+ 
+-  const { isListening, isLoading, startRecording, stopRecording } = useSpeechToText(
+-    setText,
+-    onTranscriptionComplete,
+-  );
++  const {
++    isListening,
++    isLoading,
++    isBrowserAudioLoading,
++    isBrowserAudioListening,
++    startRecording,
++    stopRecording,
++    startBrowserAudioRecording,
++    stopBrowserAudioRecording,
++    browserCaptureDevices,
++    selectedBrowserCaptureDeviceId,
++    loadBrowserCaptureDevices,
++    selectBrowserCaptureDevice,
++  } = useSpeechToText(setText, onTranscriptionComplete);
++  const microphoneDisabled = recorderDisabled || isBrowserAudioListening || isBrowserAudioLoading;
++  const browserAudioDisabled =
++    recorderDisabled ||
++    (!isBrowserAudioListening && (isBrowserAudioLoading || isListening || isLoading));
++  const browserAudioMenuDisabled = recorderDisabled || isListening || isLoading;
+ 
+   const handleStartRecording = useCallback(() => {
++    if (isBrowserAudioListening || isBrowserAudioLoading) {
++      return;
++    }
++    browserAudioRef.current = false;
+     existingTextRef.current = getValues('text') || '';
+     startRecording();
+-  }, [getValues, startRecording]);
++  }, [getValues, isBrowserAudioListening, isBrowserAudioLoading, startRecording]);
+ 
+   const handleStopRecording = useCallback(() => {
+     stopRecording();
+@@ -102,9 +138,74 @@ export default memo(function AudioRecorder({
+     }
+   }, [speechToTextEndpoint, stopRecording]);
+ 
++  const handleStartBrowserAudio = useCallback(() => {
++    if (isListening || isLoading) {
++      return;
++    }
++    browserAudioRef.current = true;
++    existingTextRef.current = getValues('text') || '';
++    void startBrowserAudioRecording();
++  }, [getValues, isListening, isLoading, startBrowserAudioRecording]);
++
++  const handleStopBrowserAudio = useCallback(() => {
++    stopBrowserAudioRecording();
++  }, [stopBrowserAudioRecording]);
++
++  const browserAudioMenuId = useId();
++  const [browserAudioMenuOpen, setBrowserAudioMenuOpen] = useState(false);
++
++  const handleOpenBrowserAudioMenu = useCallback(() => {
++    void loadBrowserCaptureDevices();
++  }, [loadBrowserCaptureDevices]);
++
++  const handleBrowserAudioMenuOpenChange = useCallback(
++    (open: boolean) => {
++      setBrowserAudioMenuOpen(open);
++      if (open) {
++        handleOpenBrowserAudioMenu();
++      }
++    },
++    [handleOpenBrowserAudioMenu],
++  );
++
++  const handleSelectBrowserAudioDevice = useCallback(
++    (deviceId: string) => {
++      void selectBrowserCaptureDevice(deviceId);
++    },
++    [selectBrowserCaptureDevice],
++  );
++
++  const browserAudioDeviceItems = useMemo<MenuItemProps[]>(() => {
++    if (browserCaptureDevices.length === 0) {
++      return [
++        {
++          id: 'no-browser-audio-devices',
++          label: localize('com_ui_browser_audio_no_devices'),
++          disabled: true,
++          hideOnClick: false,
++        },
++      ];
++    }
++    return browserCaptureDevices.map((device) => {
++      const selected = selectedBrowserCaptureDeviceId === device.deviceId;
++      return {
++        id: device.deviceId,
++        label: device.label,
++        ariaChecked: selected,
++        icon: selected ? <Check className="size-4" aria-hidden="true" /> : undefined,
++        onClick: () => handleSelectBrowserAudioDevice(device.deviceId),
++      };
++    });
++  }, [
++    browserCaptureDevices,
++    selectedBrowserCaptureDeviceId,
++    localize,
++    handleSelectBrowserAudioDevice,
++  ]);
++
+   useEffect(() => {
+     const handleKeyDown = (event: KeyboardEvent) => {
+-      if (!event.shiftKey || !event.altKey || event.code !== 'KeyL' || recorderDisabled) {
++      if (!event.shiftKey || !event.altKey || event.code !== 'KeyL' || microphoneDisabled) {
+         return;
+       }
+ 
+@@ -119,7 +220,7 @@ export default memo(function AudioRecorder({
+ 
+     window.addEventListener('keydown', handleKeyDown);
+     return () => window.removeEventListener('keydown', handleKeyDown);
+-  }, [handleStartRecording, handleStopRecording, isListening, recorderDisabled]);
++  }, [handleStartRecording, handleStopRecording, isListening, microphoneDisabled]);
+ 
+   const renderIcon = () => {
+     if (isListening === true) {
+@@ -131,25 +232,86 @@ export default memo(function AudioRecorder({
+     return <ListeningIcon className="stroke-text-secondary" />;
+   };
+ 
++  const renderBrowserAudioIcon = () => {
++    if (isBrowserAudioLoading) {
++      return <Spinner className="stroke-text-secondary" />;
++    }
++    if (isBrowserAudioListening) {
++      return <AudioLinesOff />;
++    }
++    return <AudioLines className="stroke-text-secondary" />;
++  };
++
++  const browserAudioLabel = localize(
++    isBrowserAudioListening ? 'com_ui_browser_audio_stop' : 'com_ui_browser_audio_start',
++  );
++
+   return (
+-    <TooltipAnchor
+-      description={localize('com_ui_use_micrphone')}
+-      render={
+-        <IconButton
+-          id="audio-recorder"
+-          type="button"
+-          variant="ghost"
+-          size="theme"
+-          shape="theme"
+-          label={localize('com_ui_use_micrphone')}
+-          onClick={isListening === true ? handleStopRecording : handleStartRecording}
+-          disabled={recorderDisabled}
+-          className="p-1 hover:bg-surface-composer-hover"
+-          aria-pressed={isListening}
+-        >
+-          {renderIcon()}
+-        </IconButton>
+-      }
+-    />
++    <>
++      <div className="flex items-center">
++        <TooltipAnchor
++          description={browserAudioLabel}
++          render={
++            <IconButton
++              id="browser-audio-recorder"
++              type="button"
++              variant={isBrowserAudioListening ? 'destructive' : 'ghost'}
++              size="theme"
++              shape="theme"
++              label={browserAudioLabel}
++              onClick={isBrowserAudioListening ? handleStopBrowserAudio : handleStartBrowserAudio}
++              disabled={browserAudioDisabled}
++              className={isBrowserAudioListening ? 'p-1' : 'p-1 hover:bg-surface-composer-hover'}
++              aria-pressed={isBrowserAudioListening}
++            >
++              {renderBrowserAudioIcon()}
++            </IconButton>
++          }
++        />
++        <DropdownPopup
++          portal
++          unmountOnHide
++          menuId={browserAudioMenuId}
++          isOpen={browserAudioMenuOpen}
++          setIsOpen={handleBrowserAudioMenuOpenChange}
++          trigger={
++            <Ariakit.MenuButton
++              id="browser-audio-devices"
++              type="button"
++              disabled={browserAudioMenuDisabled}
++              aria-label={localize('com_ui_browser_audio_devices')}
++              title={localize('com_ui_browser_audio_devices')}
++              className="flex items-center justify-center rounded-theme-control text-text-secondary transition-colors hover:bg-surface-composer-hover disabled:pointer-events-none disabled:opacity-50"
++              style={{
++                height: 'calc(var(--theme-control-height, 2.25rem) * 2 / 3)',
++                width: '0.85rem',
++              }}
++            >
++              <ChevronDown className="h-3 w-3" aria-hidden="true" />
++            </Ariakit.MenuButton>
++          }
++          items={browserAudioDeviceItems}
++        />
++      </div>
++      <TooltipAnchor
++        description={localize('com_ui_use_micrphone')}
++        render={
++          <IconButton
++            id="audio-recorder"
++            type="button"
++            variant="ghost"
++            size="theme"
++            shape="theme"
++            label={localize('com_ui_use_micrphone')}
++            onClick={isListening === true ? handleStopRecording : handleStartRecording}
++            disabled={microphoneDisabled}
++            className="p-1 hover:bg-surface-composer-hover"
++            aria-pressed={isListening}
++          >
++            {renderIcon()}
++          </IconButton>
++        }
++      />
++    </>
+   );
+ });
+diff --git a/client/src/components/Chat/Input/ChatForm.tsx b/client/src/components/Chat/Input/ChatForm.tsx
+index dd0b1e8e9..28127c1b7 100644
+--- a/client/src/components/Chat/Input/ChatForm.tsx
++++ b/client/src/components/Chat/Input/ChatForm.tsx
+@@ -57,6 +57,7 @@ import FileFormChat from './Files/FileFormChat';
+ import InFlightSteers from './InFlightSteers';
+ import TextareaHeader from './TextareaHeader';
+ import PromptsCommand from './PromptsCommand';
++import ThinkingEffort from './ThinkingEffort';
+ import { submitFromComposer } from './submit';
+ import SkillsCommand from './SkillsCommand';
+ import AudioRecorder from './AudioRecorder';
+@@ -876,6 +877,7 @@ const ChatForm = memo(function ChatForm({
+                   <PendingToolApprovalButton conversationId={conversationId} />
+                 )}
+                 <div className="grow" />
++                <ThinkingEffort />
+                 <TokenUsage index={index} conversation={conversation} isSubmitting={isSubmitting} />
+                 {SpeechToText && (
+                   <AudioRecorder
+diff --git a/client/src/components/Chat/Input/ThinkingEffort.tsx b/client/src/components/Chat/Input/ThinkingEffort.tsx
+new file mode 100644
+index 000000000..e94d34d2b
+--- /dev/null
++++ b/client/src/components/Chat/Input/ThinkingEffort.tsx
+@@ -0,0 +1,113 @@
++import { memo, useEffect, useMemo } from 'react';
++import * as Ariakit from '@ariakit/react';
++import { TooltipAnchor } from '@librechat/client';
++import { Brain, Check, ChevronDown } from 'lucide-react';
++import { findActiveModelSpec, resolveEffortConfig } from 'librechat-data-provider';
++import type { EffortValue } from 'librechat-data-provider';
++import type { TranslationKeys } from '~/hooks';
++import { useSetIndexOptions, useLocalize } from '~/hooks';
++import { useGetStartupConfig } from '~/data-provider';
++import { useChatContext } from '~/Providers';
++import { cn } from '~/utils';
++
++/** Explicit map: dynamic key construction would defeat the typed key check. */
++const effortLabelKeys: Record<EffortValue, TranslationKeys> = {
++  low: 'com_ui_thinking_effort_low',
++  medium: 'com_ui_thinking_effort_medium',
++  high: 'com_ui_thinking_effort_high',
++  max: 'com_ui_thinking_effort_max',
++  xhigh: 'com_ui_thinking_effort_xhigh',
++};
++
++const TRIGGER_CLASS =
++  'flex h-theme-control shrink-0 items-center gap-1 rounded-theme-control-round px-2 text-sm text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-text-primary aria-disabled:cursor-not-allowed aria-disabled:opacity-50';
++const MENU_CLASS =
++  'z-[200] min-w-[9rem] rounded-xl border border-border-light bg-surface-secondary p-1.5 text-text-primary shadow-lg outline-none';
++const MENU_ITEM_CLASS =
++  'flex w-full cursor-pointer items-center justify-between gap-3 rounded-lg px-2 py-1.5 text-sm text-text-primary data-[active-item]:bg-surface-tertiary';
++
++function ThinkingEffortSelector() {
++  const localize = useLocalize();
++  const { data: startupConfig } = useGetStartupConfig();
++  /** Read the conversation from context, not from a prop: ChatForm passes a
++   *  `stableConversation` memo whose dependency allowlist omits the effort
++   *  params, so a prop would stay frozen on the value selected here. */
++  const { conversation, isSubmitting } = useChatContext();
++  const { setOption } = useSetIndexOptions();
++  const menu = Ariakit.useMenuStore({ placement: 'top-start', focusLoop: true });
++
++  const modelSpec = useMemo(
++    () => findActiveModelSpec(startupConfig?.modelSpecs?.list, conversation),
++    [startupConfig?.modelSpecs?.list, conversation],
++  );
++  const resolved = useMemo(
++    () => resolveEffortConfig(modelSpec, conversation),
++    [modelSpec, conversation],
++  );
++
++  const field = resolved?.field;
++  const selectedValue = resolved?.selectedValue;
++  const storedValue = field == null ? undefined : conversation?.[field];
++
++  /** Persist the resolved value whenever it diverges from what the conversation
++   *  holds: seeds the preset default on a new chat, and repairs a value the
++   *  newly-selected model does not offer (or carries a supported one across
++   *  from the sibling field). Guarded by equality, so this settles in one pass. */
++  useEffect(() => {
++    if (field == null || selectedValue == null || storedValue === selectedValue) {
++      return;
++    }
++    setOption(field)(selectedValue);
++  }, [field, selectedValue, storedValue, setOption]);
++
++  if (resolved == null || startupConfig?.interface?.parameters === false) {
++    return null;
++  }
++
++  const label = localize(effortLabelKeys[resolved.selectedValue]);
++  const controlLabel = localize('com_ui_thinking_effort');
++
++  return (
++    <>
++      <TooltipAnchor
++        description={`${controlLabel}: ${label}`}
++        side="top"
++        render={
++          <Ariakit.MenuButton
++            store={menu}
++            type="button"
++            data-testid="thinking-effort"
++            aria-label={controlLabel}
++            disabled={isSubmitting}
++            className={cn(TRIGGER_CLASS)}
++          >
++            <Brain className="size-4 shrink-0" aria-hidden="true" />
++            <span className="truncate">{label}</span>
++            <ChevronDown className="size-3 shrink-0 opacity-60" aria-hidden="true" />
++          </Ariakit.MenuButton>
++        }
++      />
++      <Ariakit.Menu store={menu} portal gutter={6} aria-label={controlLabel} className={MENU_CLASS}>
++        {resolved.options.map((option) => (
++          <Ariakit.MenuItem
++            key={option}
++            className={MENU_ITEM_CLASS}
++            aria-checked={option === resolved.selectedValue}
++            role="menuitemradio"
++            onClick={() => {
++              setOption(resolved.field)(option);
++              menu.hide();
++            }}
++          >
++            <span>{localize(effortLabelKeys[option])}</span>
++            {option === resolved.selectedValue && (
++              <Check className="size-4 shrink-0" aria-hidden="true" />
++            )}
++          </Ariakit.MenuItem>
++        ))}
++      </Ariakit.Menu>
++    </>
++  );
++}
++
++export default memo(ThinkingEffortSelector);
+diff --git a/client/src/components/Chat/Input/__tests__/AudioRecorder.spec.tsx b/client/src/components/Chat/Input/__tests__/AudioRecorder.spec.tsx
+index 96c86d2ff..2837ed5a5 100644
+--- a/client/src/components/Chat/Input/__tests__/AudioRecorder.spec.tsx
++++ b/client/src/components/Chat/Input/__tests__/AudioRecorder.spec.tsx
+@@ -1,18 +1,27 @@
+ import React from 'react';
+ import { RecoilRoot } from 'recoil';
+-import { act, render, screen } from '@testing-library/react';
++import { act, fireEvent, render, screen } from '@testing-library/react';
+ import AudioRecorder from '../AudioRecorder';
+ import store from '~/store';
+ 
+ let mockSpeechToTextEndpoint = 'browser';
+ let mockBrowserIsListening = false;
+ let mockExternalIsListening = false;
++let mockBrowserAudioIsListening = false;
++let mockBrowserAudioIsLoading = false;
++let mockBrowserCaptureDevices: { deviceId: string; label: string }[] = [];
++let mockSelectedBrowserCaptureDeviceId: string | null = null;
+ let mockSetText: ((text: string) => void) | undefined;
++let mockOnTranscriptionComplete: ((text: string) => void) | undefined;
+ 
+ const mockStartSpeechRecordingBrowser = jest.fn();
+ const mockStopSpeechRecordingBrowser = jest.fn();
+ const mockStartSpeechRecordingExternal = jest.fn();
+ const mockStopSpeechRecordingExternal = jest.fn();
++const mockStartBrowserAudioRecording = jest.fn();
++const mockStopBrowserAudioRecording = jest.fn();
++const mockLoadBrowserCaptureDevices = jest.fn();
++const mockSelectBrowserCaptureDevice = jest.fn();
+ const mockSetValue = jest.fn();
+ const mockReset = jest.fn();
+ const mockGetValues = jest.fn(() => 'existing draft');
+@@ -59,13 +68,22 @@ jest.mock('~/hooks/Input/useSpeechToTextBrowser', () => ({
+ 
+ jest.mock('~/hooks/Input/useSpeechToTextExternal', () => ({
+   __esModule: true,
+-  default: (setText: (text: string) => void) => {
++  default: (setText: (text: string) => void, onTranscriptionComplete: (text: string) => void) => {
+     mockSetText = setText;
++    mockOnTranscriptionComplete = onTranscriptionComplete;
+     return {
+       isListening: mockExternalIsListening,
+       isLoading: false,
+       externalStartRecording: mockStartSpeechRecordingExternal,
+       externalStopRecording: mockStopSpeechRecordingExternal,
++      isBrowserAudioListening: mockBrowserAudioIsListening,
++      isBrowserAudioLoading: mockBrowserAudioIsLoading,
++      startBrowserAudioRecording: mockStartBrowserAudioRecording,
++      stopBrowserAudioRecording: mockStopBrowserAudioRecording,
++      browserCaptureDevices: mockBrowserCaptureDevices,
++      selectedBrowserCaptureDeviceId: mockSelectedBrowserCaptureDeviceId,
++      loadBrowserCaptureDevices: mockLoadBrowserCaptureDevices,
++      selectBrowserCaptureDevice: mockSelectBrowserCaptureDevice,
+     };
+   },
+ }));
+@@ -123,7 +141,73 @@ describe('AudioRecorder speech shortcut', () => {
+     mockSpeechToTextEndpoint = 'browser';
+     mockBrowserIsListening = false;
+     mockExternalIsListening = false;
++    mockBrowserAudioIsListening = false;
++    mockBrowserAudioIsLoading = false;
++    mockBrowserCaptureDevices = [];
++    mockSelectedBrowserCaptureDeviceId = null;
+     mockSetText = undefined;
++    mockOnTranscriptionComplete = undefined;
++  });
++
++  it('renders the Firefox audio control immediately before the microphone control', () => {
++    renderRecorder();
++
++    const buttons = screen.getAllByRole('button');
++    expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
++      'com_ui_browser_audio_start',
++      'com_ui_browser_audio_devices',
++      'com_ui_use_micrphone',
++    ]);
++    expect(buttons[0].querySelector('.lucide-audio-lines')).toBeInTheDocument();
++
++    fireEvent.click(buttons[0]);
++    expect(mockStartBrowserAudioRecording).toHaveBeenCalledTimes(1);
++  });
++
++  it('lists librechat_ devices and selects one from the chevron menu', async () => {
++    mockBrowserCaptureDevices = [
++      { deviceId: 'dev-1', label: 'librechat_sink' },
++      { deviceId: 'dev-2', label: 'librechat_monitor' },
++    ];
++    renderRecorder();
++
++    fireEvent.click(screen.getByRole('button', { name: 'com_ui_browser_audio_devices' }));
++    expect(mockLoadBrowserCaptureDevices).toHaveBeenCalledTimes(1);
++
++    const option = await screen.findByText('librechat_monitor');
++    fireEvent.click(option);
++    expect(mockSelectBrowserCaptureDevice).toHaveBeenCalledWith('dev-2');
++  });
++
++  it('preserves the existing draft when Firefox audio is transcribed', () => {
++    renderRecorder();
++
++    fireEvent.click(screen.getByRole('button', { name: 'com_ui_browser_audio_start' }));
++    act(() => mockOnTranscriptionComplete?.('transcript'));
++
++    expect(mockAsk).toHaveBeenCalledWith({ text: 'existing draft transcript' });
++  });
++
++  it('stops Firefox audio and blocks the microphone while it is recording', () => {
++    mockBrowserAudioIsListening = true;
++    renderRecorder();
++
++    const browserAudioButton = screen.getByRole('button', {
++      name: 'com_ui_browser_audio_stop',
++    });
++    expect(screen.getByRole('button', { name: 'com_ui_use_micrphone' })).toBeDisabled();
++    expect(browserAudioButton).not.toBeDisabled();
++    expect(browserAudioButton.querySelector('.lucide-audio-lines-off')).toBeInTheDocument();
++
++    fireEvent.click(browserAudioButton);
++    expect(mockStopBrowserAudioRecording).toHaveBeenCalledTimes(1);
++  });
++
++  it('blocks Firefox audio while the microphone is recording', () => {
++    mockBrowserIsListening = true;
++    renderRecorder();
++
++    expect(screen.getByRole('button', { name: 'com_ui_browser_audio_start' })).toBeDisabled();
+   });
+ 
+   it('preserves the existing draft when browser recording starts from the shortcut', () => {
+diff --git a/client/src/hooks/Input/useSpeechToText.spec.ts b/client/src/hooks/Input/useSpeechToText.spec.ts
+index 34eb38f04..ff82260b8 100644
+--- a/client/src/hooks/Input/useSpeechToText.spec.ts
++++ b/client/src/hooks/Input/useSpeechToText.spec.ts
+@@ -9,6 +9,10 @@ const mockStartSpeechRecordingBrowser = jest.fn();
+ const mockStopSpeechRecordingBrowser = jest.fn();
+ const mockStartSpeechRecordingExternal = jest.fn();
+ const mockStopSpeechRecordingExternal = jest.fn();
++const mockStartBrowserAudioRecording = jest.fn();
++const mockStopBrowserAudioRecording = jest.fn();
++const mockLoadBrowserCaptureDevices = jest.fn();
++const mockSelectBrowserCaptureDevice = jest.fn();
+ 
+ jest.mock('./useGetAudioSettings', () => ({
+   __esModule: true,
+@@ -32,6 +36,14 @@ jest.mock('./useSpeechToTextExternal', () => ({
+     isLoading: false,
+     externalStartRecording: mockStartSpeechRecordingExternal,
+     externalStopRecording: mockStopSpeechRecordingExternal,
++    isBrowserAudioListening: false,
++    isBrowserAudioLoading: false,
++    startBrowserAudioRecording: mockStartBrowserAudioRecording,
++    stopBrowserAudioRecording: mockStopBrowserAudioRecording,
++    browserCaptureDevices: [],
++    selectedBrowserCaptureDeviceId: null,
++    loadBrowserCaptureDevices: mockLoadBrowserCaptureDevices,
++    selectBrowserCaptureDevice: mockSelectBrowserCaptureDevice,
+   }),
+ }));
+ 
+@@ -66,6 +78,15 @@ describe('useSpeechToText', () => {
+     expect(mockStartSpeechRecordingExternal).not.toHaveBeenCalled();
+   });
+ 
++  it('always exposes the external Firefox audio recorder', () => {
++    mockSpeechToTextEndpoint = 'browser';
++    const { result } = renderHook(() => useSpeechToText(jest.fn(), jest.fn()));
++
++    act(() => void result.current.startBrowserAudioRecording());
++
++    expect(mockStartBrowserAudioRecording).toHaveBeenCalledTimes(1);
++  });
++
+   it('selects the active engine stop handler', () => {
+     mockExternalIsListening = true;
+     const { result } = renderHook(() => useSpeechToText(jest.fn(), jest.fn()));
+diff --git a/client/src/hooks/Input/useSpeechToText.ts b/client/src/hooks/Input/useSpeechToText.ts
+index f149b72af..002c18664 100644
+--- a/client/src/hooks/Input/useSpeechToText.ts
++++ b/client/src/hooks/Input/useSpeechToText.ts
+@@ -8,8 +8,16 @@ const useSpeechToText = (
+ ): {
+   isLoading?: boolean;
+   isListening?: boolean;
+-  stopRecording: () => void | (() => Promise<void>);
+-  startRecording: () => void | (() => Promise<void>);
++  isBrowserAudioLoading: boolean;
++  isBrowserAudioListening: boolean;
++  stopRecording: () => void | boolean;
++  startRecording: () => void | Promise<void>;
++  stopBrowserAudioRecording: () => boolean;
++  startBrowserAudioRecording: () => Promise<void>;
++  browserCaptureDevices: { deviceId: string; label: string }[];
++  selectedBrowserCaptureDeviceId: string | null;
++  loadBrowserCaptureDevices: () => Promise<void>;
++  selectBrowserCaptureDevice: (deviceId: string) => Promise<void>;
+ } => {
+   const { speechToTextEndpoint } = useGetAudioSettings();
+   const externalSpeechToText = speechToTextEndpoint === 'external';
+@@ -26,6 +34,14 @@ const useSpeechToText = (
+     isLoading: speechIsLoadingExternal,
+     externalStartRecording: startSpeechRecordingExternal,
+     externalStopRecording: stopSpeechRecordingExternal,
++    isBrowserAudioLoading,
++    isBrowserAudioListening,
++    stopBrowserAudioRecording,
++    startBrowserAudioRecording,
++    browserCaptureDevices,
++    selectedBrowserCaptureDeviceId,
++    loadBrowserCaptureDevices,
++    selectBrowserCaptureDevice,
+   } = useSpeechToTextExternal(setText, onTranscriptionComplete);
+ 
+   const isListening = externalSpeechToText ? speechIsListeningExternal : speechIsListeningBrowser;
+@@ -41,8 +57,16 @@ const useSpeechToText = (
+   return {
+     isLoading,
+     isListening,
++    isBrowserAudioLoading,
++    isBrowserAudioListening,
+     stopRecording,
+     startRecording,
++    stopBrowserAudioRecording,
++    startBrowserAudioRecording,
++    browserCaptureDevices,
++    selectedBrowserCaptureDeviceId,
++    loadBrowserCaptureDevices,
++    selectBrowserCaptureDevice,
+   };
+ };
+ 
+diff --git a/client/src/hooks/Input/useSpeechToTextExternal.spec.ts b/client/src/hooks/Input/useSpeechToTextExternal.spec.ts
+index a48e536e7..7fd359712 100644
+--- a/client/src/hooks/Input/useSpeechToTextExternal.spec.ts
++++ b/client/src/hooks/Input/useSpeechToTextExternal.spec.ts
+@@ -1,4 +1,4 @@
+-import { getBestSupportedMimeType } from './useSpeechToTextExternal';
++import { findPhysicalMicrophone, getBestSupportedMimeType } from './useSpeechToTextExternal';
+ 
+ const preferredMimeTypes = [
+   'audio/ogg;codecs=opus',
+@@ -9,6 +9,15 @@ const preferredMimeTypes = [
+   'audio/mp4',
+ ];
+ 
++const audioInput = (
++  deviceId: string,
++  label: string,
++): Pick<MediaDeviceInfo, 'deviceId' | 'kind' | 'label'> => ({
++  deviceId,
++  kind: 'audioinput',
++  label,
++});
++
+ describe('getBestSupportedMimeType', () => {
+   it.each(
+     preferredMimeTypes.map((expected, index) => ({
+@@ -38,3 +47,15 @@ describe('getBestSupportedMimeType', () => {
+     expect(isTypeSupported.mock.calls.map(([type]) => type)).toEqual(preferredMimeTypes);
+   });
+ });
++
++describe('findPhysicalMicrophone', () => {
++  it('skips LibreChat capture sources', () => {
++    const microphone = findPhysicalMicrophone([
++      audioInput('browser', 'LibreChat Browser Capture'),
++      audioInput('zoom', 'LibreChat Zoom Capture'),
++      audioInput('microphone', 'Built-in Audio Analog Stereo'),
++    ]);
++
++    expect(microphone?.deviceId).toBe('microphone');
++  });
++});
+diff --git a/client/src/hooks/Input/useSpeechToTextExternal.ts b/client/src/hooks/Input/useSpeechToTextExternal.ts
+index 6dc698cee..3bc8e9c93 100644
+--- a/client/src/hooks/Input/useSpeechToTextExternal.ts
++++ b/client/src/hooks/Input/useSpeechToTextExternal.ts
+@@ -1,9 +1,18 @@
+-import { useState, useRef } from 'react';
++import { useEffect, useRef, useState } from 'react';
+ import { useRecoilState } from 'recoil';
+ import { useToastContext } from '@librechat/client';
+ import { useSpeechToTextMutation } from '~/data-provider';
++import useLocalize from '~/hooks/useLocalize';
+ import store from '~/store';
+ 
++type RecordingSource = 'microphone' | 'browser';
++
++type BrowserCaptureDevice = { deviceId: string; label: string };
++type AudioInputDevice = Pick<MediaDeviceInfo, 'deviceId' | 'kind' | 'label'>;
++
++const BROWSER_CAPTURE_PREFIX = 'librechat_';
++const BROWSER_CAPTURE_DEVICE_KEY = 'librechatBrowserCaptureDeviceId';
++
+ export const getBestSupportedMimeType = (
+   isTypeSupported: (type: string) => boolean = (type) =>
+     typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(type),
+@@ -25,29 +34,80 @@ export const getBestSupportedMimeType = (
+   }
+ 
+   const ua = userAgent.toLowerCase();
+-  if (ua.indexOf('safari') !== -1 && ua.indexOf('chrome') === -1) {
++  if (ua.includes('safari') && !ua.includes('chrome')) {
+     return 'audio/mp4';
+-  } else if (ua.indexOf('firefox') !== -1) {
++  }
++  if (ua.includes('firefox')) {
+     return 'audio/ogg';
+   }
+-
+   return 'audio/webm';
+ };
+ 
++const getFileExtension = (mimeType: string) => {
++  if (mimeType.includes('mp4')) {
++    return 'm4a';
++  }
++  if (mimeType.includes('ogg')) {
++    return 'ogg';
++  }
++  if (mimeType.includes('wav')) {
++    return 'wav';
++  }
++  return 'webm';
++};
++
++const normalizeDeviceLabel = (label: string) => label.toLowerCase().replace(/[^a-z0-9]+/g, '_');
++
++const matchesBrowserCaptureDevice = (label: string) =>
++  normalizeDeviceLabel(label).startsWith(BROWSER_CAPTURE_PREFIX);
++
++const isLibreChatCaptureDevice = (label: string) =>
++  normalizeDeviceLabel(label).includes(BROWSER_CAPTURE_PREFIX);
++
++export const findPhysicalMicrophone = (devices: AudioInputDevice[]) =>
++  devices.find(
++    (device) =>
++      device.kind === 'audioinput' &&
++      device.label !== '' &&
++      !isLibreChatCaptureDevice(device.label),
++  );
++
++const isMissingDeviceError = (error: Error) =>
++  error.name === 'NotFoundError' || error.name === 'OverconstrainedError';
++
++const browserCaptureConstraints = (deviceId?: string): MediaTrackConstraints => ({
++  ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
++  echoCancellation: false,
++  noiseSuppression: false,
++  autoGainControl: false,
++});
++
+ const useSpeechToTextExternal = (
+   setText: (text: string) => void,
+   onTranscriptionComplete: (text: string) => void,
+ ) => {
++  const localize = useLocalize();
+   const { showToast } = useToastContext();
+-  const audioStream = useRef<MediaStream | null>(null);
++  const audioStreamRef = useRef<MediaStream | null>(null);
+   const animationFrameIdRef = useRef<number | null>(null);
+   const audioContextRef = useRef<AudioContext | null>(null);
+   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+-
++  const recordingSourceRef = useRef<RecordingSource | null>(null);
++  const busySourceRef = useRef<RecordingSource | null>(null);
+   const audioChunksRef = useRef<Blob[]>([]);
+-  const [isListening, setIsListening] = useState(false);
+-  const [isRequestBeingMade, setIsRequestBeingMade] = useState(false);
+-  const [audioMimeType, setAudioMimeType] = useState<string>(() => getBestSupportedMimeType());
++  const mountedRef = useRef(true);
++  const discardRecordingRef = useRef(false);
++  const pendingSwitchDeviceRef = useRef<string | null>(null);
++
++  const [recordingSource, setRecordingSource] = useState<RecordingSource | null>(null);
++  const [requestingSource, setRequestingSource] = useState<RecordingSource | null>(null);
++  const [finalizingSource, setFinalizingSource] = useState<RecordingSource | null>(null);
++  const [browserCaptureDevices, setBrowserCaptureDevices] = useState<BrowserCaptureDevice[]>([]);
++  const [selectedBrowserCaptureDeviceId, setSelectedBrowserCaptureDeviceId] = useState<
++    string | null
++  >(() =>
++    typeof localStorage === 'undefined' ? null : localStorage.getItem(BROWSER_CAPTURE_DEVICE_KEY),
++  );
+ 
+   const [minDecibels] = useRecoilState(store.decibelValue);
+   const [autoSendText] = useRecoilState(store.autoSendText);
+@@ -55,199 +115,419 @@ const useSpeechToTextExternal = (
+   const [speechToText] = useRecoilState<boolean>(store.speechToText);
+   const [autoTranscribeAudio] = useRecoilState<boolean>(store.autoTranscribeAudio);
+ 
+-  const { mutate: processAudio, isLoading: isProcessing } = useSpeechToTextMutation({
++  const resetBusyState = () => {
++    busySourceRef.current = null;
++    if (!mountedRef.current) {
++      return;
++    }
++    setRequestingSource(null);
++    setRecordingSource(null);
++    setFinalizingSource(null);
++  };
++
++  const { mutate: processAudio } = useSpeechToTextMutation({
+     onSuccess: (data) => {
++      if (!mountedRef.current) {
++        return;
++      }
+       const extractedText = data.text;
+       setText(extractedText);
+-      setIsRequestBeingMade(false);
++      resetBusyState();
+ 
+       if (autoSendText > -1 && speechToText && extractedText.length > 0) {
+-        setTimeout(() => {
+-          onTranscriptionComplete(extractedText);
+-        }, autoSendText * 1000);
++        setTimeout(() => onTranscriptionComplete(extractedText), autoSendText * 1000);
+       }
+     },
+     onError: () => {
++      if (!mountedRef.current) {
++        return;
++      }
+       showToast({
+         message: 'An error occurred while processing the audio, maybe the audio was too short',
+         status: 'error',
+       });
+-      setIsRequestBeingMade(false);
++      resetBusyState();
+     },
+   });
+ 
+-  const getFileExtension = (mimeType: string) => {
+-    if (mimeType.includes('mp4')) {
+-      return 'm4a';
+-    } else if (mimeType.includes('ogg')) {
+-      return 'ogg';
+-    } else if (mimeType.includes('wav')) {
+-      return 'wav';
+-    } else {
+-      return 'webm';
++  const stopMonitoring = () => {
++    if (animationFrameIdRef.current !== null) {
++      window.cancelAnimationFrame(animationFrameIdRef.current);
++      animationFrameIdRef.current = null;
++    }
++    if (audioContextRef.current) {
++      void audioContextRef.current.close();
++      audioContextRef.current = null;
+     }
+   };
+ 
+-  const cleanup = () => {
+-    if (mediaRecorderRef.current) {
+-      mediaRecorderRef.current = null;
++  const stopTracks = () => {
++    audioStreamRef.current?.getTracks().forEach((track) => track.stop());
++    audioStreamRef.current = null;
++  };
++
++  const cleanupMedia = () => {
++    stopMonitoring();
++    stopTracks();
++    mediaRecorderRef.current = null;
++    recordingSourceRef.current = null;
++  };
++
++  const requestAudioStream = (deviceId?: string) =>
++    navigator.mediaDevices.getUserMedia({
++      audio: browserCaptureConstraints(deviceId),
++      video: false,
++    });
++
++  const requestMicrophoneStream = (deviceId?: string) =>
++    navigator.mediaDevices.getUserMedia({
++      audio: deviceId ? { deviceId: { exact: deviceId } } : true,
++      video: false,
++    });
++
++  const getMicrophoneStream = async () => {
++    let microphone = findPhysicalMicrophone(await navigator.mediaDevices.enumerateDevices());
++    if (microphone) {
++      return requestMicrophoneStream(microphone.deviceId);
++    }
++
++    const stream = await requestMicrophoneStream();
++    const track = stream.getAudioTracks()[0];
++    if (!track?.label || !isLibreChatCaptureDevice(track.label)) {
++      return stream;
+     }
++
++    stream.getTracks().forEach((item) => item.stop());
++    microphone = findPhysicalMicrophone(await navigator.mediaDevices.enumerateDevices());
++    if (!microphone) {
++      throw new DOMException('Physical microphone not found', 'NotFoundError');
++    }
++    return requestMicrophoneStream(microphone.deviceId);
+   };
+ 
+-  const getMicrophonePermission = async () => {
+-    try {
+-      const streamData = await navigator.mediaDevices.getUserMedia({
+-        audio: true,
+-        video: false,
+-      });
+-      audioStream.current = streamData ?? null;
+-    } catch {
+-      audioStream.current = null;
++  const saveBrowserCaptureDevice = (stream: MediaStream) => {
++    const deviceId = stream.getAudioTracks()[0]?.getSettings().deviceId;
++    if (deviceId) {
++      localStorage.setItem(BROWSER_CAPTURE_DEVICE_KEY, deviceId);
+     }
++    return stream;
+   };
+ 
+-  const handleStop = () => {
+-    if (audioChunksRef.current.length > 0) {
+-      const audioBlob = new Blob(audioChunksRef.current, { type: audioMimeType });
+-      const fileExtension = getFileExtension(audioMimeType);
++  const getBrowserCaptureStream = async () => {
++    const savedDeviceId = localStorage.getItem(BROWSER_CAPTURE_DEVICE_KEY);
++    if (savedDeviceId) {
++      try {
++        return saveBrowserCaptureDevice(await requestAudioStream(savedDeviceId));
++      } catch (error) {
++        if (!(error instanceof Error) || !isMissingDeviceError(error)) {
++          throw error;
++        }
++        localStorage.removeItem(BROWSER_CAPTURE_DEVICE_KEY);
++      }
++    }
++
++    const devices = await navigator.mediaDevices.enumerateDevices();
++    const audioInputs = devices.filter((device) => device.kind === 'audioinput');
++    const captureDevice = audioInputs.find((device) => matchesBrowserCaptureDevice(device.label));
+ 
+-      audioChunksRef.current = [];
++    if (captureDevice) {
++      return saveBrowserCaptureDevice(await requestAudioStream(captureDevice.deviceId));
++    }
++    if (audioInputs.some((device) => device.label !== '')) {
++      throw new DOMException('Browser capture device not found', 'NotFoundError');
++    }
+ 
+-      const formData = new FormData();
+-      formData.append('audio', audioBlob, `audio.${fileExtension}`);
+-      if (languageSTT) {
+-        formData.append('language', languageSTT);
+-      }
+-      setIsRequestBeingMade(true);
+-      cleanup();
+-      processAudio(formData);
+-    } else {
+-      showToast({ message: 'The audio was too short', status: 'warning' });
++    showToast({
++      message: localize('com_ui_browser_audio_select_device'),
++      status: 'info',
++    });
++    const stream = await requestAudioStream();
++    const track = stream.getAudioTracks()[0];
++    if (track?.label && !matchesBrowserCaptureDevice(track.label)) {
++      stream.getTracks().forEach((item) => item.stop());
++      throw new DOMException('Browser capture device not selected', 'NotFoundError');
++    }
++    return saveBrowserCaptureDevice(stream);
++  };
++
++  const getAudioStream = (source: RecordingSource) => {
++    if (source === 'browser') {
++      return getBrowserCaptureStream();
++    }
++    return getMicrophoneStream();
++  };
++
++  const handleCaptureError = (error: Error) => {
++    if (isMissingDeviceError(error)) {
++      localStorage.removeItem(BROWSER_CAPTURE_DEVICE_KEY);
++      showToast({ message: localize('com_ui_browser_audio_unavailable'), status: 'error' });
++      return;
++    }
++    if (error.name === 'NotAllowedError' || error.name === 'SecurityError') {
++      showToast({ message: localize('com_ui_browser_audio_permission_denied'), status: 'error' });
++      return;
+     }
++    showToast({ message: localize('com_ui_browser_audio_error'), status: 'error' });
+   };
+ 
+-  const monitorSilence = (stream: MediaStream, stopRecording: () => void) => {
++  const finishRecording = (source: RecordingSource, mimeType: string) => {
++    const audioChunks = audioChunksRef.current;
++    audioChunksRef.current = [];
++    cleanupMedia();
++
++    if (source === 'browser' && pendingSwitchDeviceRef.current) {
++      // A device switch was requested mid-capture: discard the in-flight audio
++      // and restart the browser capture on the newly selected device.
++      pendingSwitchDeviceRef.current = null;
++      resetBusyState();
++      void startRecording('browser');
++      return;
++    }
++
++    if (discardRecordingRef.current) {
++      return;
++    }
++    if (audioChunks.length === 0 || audioChunks.every((chunk) => chunk.size === 0)) {
++      showToast({
++        message:
++          source === 'browser'
++            ? localize('com_ui_browser_audio_too_short')
++            : 'The audio was too short',
++        status: 'warning',
++      });
++      resetBusyState();
++      return;
++    }
++
++    const audioBlob = new Blob(audioChunks, { type: mimeType });
++    const audioFile = new File([audioBlob], `audio.${getFileExtension(mimeType)}`, {
++      type: mimeType,
++    });
++    const formData = new FormData();
++    formData.append('audio', audioFile);
++    if (languageSTT) {
++      formData.append('language', languageSTT);
++    }
++    processAudio(formData);
++  };
++
++  const stopRecording = (source: RecordingSource) => {
++    const recorder = mediaRecorderRef.current;
++    if (!recorder || recorder.state !== 'recording' || recordingSourceRef.current !== source) {
++      return false;
++    }
++
++    if (mountedRef.current) {
++      setRecordingSource(null);
++      setFinalizingSource(source);
++    }
++    recorder.stop();
++    return true;
++  };
++
++  const monitorSilence = (stream: MediaStream) => {
+     const audioContext = new AudioContext();
+-    const audioStreamSource = audioContext.createMediaStreamSource(stream);
++    audioContextRef.current = audioContext;
+     const analyser = audioContext.createAnalyser();
+     analyser.minDecibels = minDecibels;
+-    audioStreamSource.connect(analyser);
++    audioContext.createMediaStreamSource(stream).connect(analyser);
+ 
+-    const bufferLength = analyser.frequencyBinCount;
+-    const domainData = new Uint8Array(bufferLength);
++    const domainData = new Uint8Array(analyser.frequencyBinCount);
+     let lastSoundTime = Date.now();
+-
+     const detectSound = () => {
+       analyser.getByteFrequencyData(domainData);
+-      const isSoundDetected = domainData.some((value) => value > 0);
+-
+-      if (isSoundDetected) {
++      if (domainData.some((value) => value > 0)) {
+         lastSoundTime = Date.now();
+       }
+-
+-      const timeSinceLastSound = Date.now() - lastSoundTime;
+-      const isOverSilenceThreshold = timeSinceLastSound > 3000;
+-
+-      if (isOverSilenceThreshold) {
+-        stopRecording();
++      if (Date.now() - lastSoundTime > 3000) {
++        stopRecording('microphone');
+         return;
+       }
+-
+       animationFrameIdRef.current = window.requestAnimationFrame(detectSound);
+     };
+-
+     animationFrameIdRef.current = window.requestAnimationFrame(detectSound);
+   };
+ 
+-  const startRecording = async () => {
+-    if (isRequestBeingMade) {
+-      showToast({ message: 'A request is already being made. Please wait.', status: 'warning' });
++  const startRecording = async (source: RecordingSource) => {
++    if (busySourceRef.current) {
+       return;
+     }
+-
+-    if (!audioStream.current) {
+-      await getMicrophonePermission();
++    if (typeof MediaRecorder === 'undefined') {
++      showToast({ message: 'MediaRecorder is not supported in this browser', status: 'error' });
++      return;
+     }
+ 
+-    if (audioStream.current) {
+-      try {
+-        audioChunksRef.current = [];
+-        const bestMimeType = getBestSupportedMimeType();
+-        setAudioMimeType(bestMimeType);
+-
+-        mediaRecorderRef.current = new MediaRecorder(audioStream.current, {
+-          mimeType: audioMimeType,
+-        });
+-        mediaRecorderRef.current.addEventListener('dataavailable', (event: BlobEvent) => {
++    busySourceRef.current = source;
++    setRequestingSource(source);
++    try {
++      const stream = await getAudioStream(source);
++      if (!mountedRef.current) {
++        stream.getTracks().forEach((track) => track.stop());
++        return;
++      }
++
++      audioStreamRef.current = stream;
++      audioChunksRef.current = [];
++      const preferredMimeType = getBestSupportedMimeType();
++      const recorder = new MediaRecorder(stream, { mimeType: preferredMimeType });
++      const mimeType = recorder.mimeType || preferredMimeType;
++      mediaRecorderRef.current = recorder;
++      recordingSourceRef.current = source;
++      recorder.addEventListener('dataavailable', (event: BlobEvent) => {
++        if (event.data.size > 0) {
+           audioChunksRef.current.push(event.data);
+-        });
+-        mediaRecorderRef.current.addEventListener('stop', handleStop);
+-        mediaRecorderRef.current.start(100);
+-        if (!audioContextRef.current && autoTranscribeAudio && speechToText) {
+-          monitorSilence(audioStream.current, stopRecording);
+         }
+-        setIsListening(true);
+-      } catch (error) {
+-        showToast({ message: `Error starting recording: ${error}`, status: 'error' });
++      });
++      recorder.addEventListener('stop', () => finishRecording(source, mimeType), { once: true });
++      if (source === 'browser') {
++        stream.getAudioTracks()[0]?.addEventListener(
++          'ended',
++          () => {
++            if (recordingSourceRef.current !== 'browser' || discardRecordingRef.current) {
++              return;
++            }
++            showToast({ message: localize('com_ui_browser_audio_unavailable'), status: 'error' });
++            stopRecording('browser');
++          },
++          { once: true },
++        );
++      }
++      recorder.start(100);
++      setRequestingSource(null);
++      setRecordingSource(source);
++
++      if (source === 'microphone' && autoTranscribeAudio && speechToText) {
++        monitorSilence(stream);
++      }
++    } catch (error) {
++      cleanupMedia();
++      resetBusyState();
++      if (source === 'browser') {
++        handleCaptureError(error instanceof Error ? error : new Error(String(error)));
++        return;
+       }
+-    } else {
+       showToast({ message: 'Microphone permission not granted', status: 'error' });
+     }
+   };
+ 
+-  const stopRecording = () => {
+-    if (!mediaRecorderRef.current) {
+-      return;
+-    }
+-
+-    if (mediaRecorderRef.current.state === 'recording') {
+-      mediaRecorderRef.current.stop();
+-
+-      audioStream.current?.getTracks().forEach((track) => track.stop());
+-      audioStream.current = null;
++  const listBrowserCaptureDevices = async (): Promise<BrowserCaptureDevice[]> => {
++    const devices = await navigator.mediaDevices.enumerateDevices();
++    return devices
++      .filter((device) => device.kind === 'audioinput' && matchesBrowserCaptureDevice(device.label))
++      .map((device) => ({ deviceId: device.deviceId, label: device.label }));
++  };
+ 
+-      if (animationFrameIdRef.current !== null) {
+-        window.cancelAnimationFrame(animationFrameIdRef.current);
+-        animationFrameIdRef.current = null;
++  const refreshBrowserCaptureDevices = async () => {
++    try {
++      const captureDevices = await listBrowserCaptureDevices();
++      if (mountedRef.current) {
++        setBrowserCaptureDevices(captureDevices);
+       }
++    } catch {
++      /* enumeration failures are non-fatal for the selector */
++    }
++  };
+ 
+-      setIsListening(false);
+-    } else {
+-      showToast({ message: 'MediaRecorder is not recording', status: 'error' });
++  const loadBrowserCaptureDevices = async () => {
++    try {
++      const devices = await navigator.mediaDevices.enumerateDevices();
++      const hasLabels = devices.some(
++        (device) => device.kind === 'audioinput' && device.label !== '',
++      );
++      if (!hasLabels) {
++        /**
++         * Device labels stay hidden until microphone access is granted for this
++         * page load, so we cannot filter by the librechat_ prefix yet. Probe for
++         * permission once (this shows Firefox's native prompt), then release the
++         * stream and re-enumerate now that labels are exposed.
++         */
++        const probe = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
++        probe.getTracks().forEach((track) => track.stop());
++      }
++      await refreshBrowserCaptureDevices();
++    } catch (error) {
++      handleCaptureError(error instanceof Error ? error : new Error(String(error)));
+     }
+   };
+ 
+-  const externalStartRecording = () => {
+-    if (typeof MediaRecorder === 'undefined') {
+-      showToast({ message: 'MediaRecorder is not supported in this browser', status: 'error' });
+-      return;
++  const selectBrowserCaptureDevice = async (deviceId: string) => {
++    localStorage.setItem(BROWSER_CAPTURE_DEVICE_KEY, deviceId);
++    if (mountedRef.current) {
++      setSelectedBrowserCaptureDeviceId(deviceId);
+     }
+ 
+-    if (isListening) {
+-      showToast({ message: 'Already listening. Please stop recording first.', status: 'warning' });
++    if (recordingSourceRef.current === 'browser') {
++      /**
++       * Switch on the go: stop the in-flight capture and let finishRecording
++       * restart the browser recording on the newly selected device.
++       */
++      pendingSwitchDeviceRef.current = deviceId;
++      stopRecording('browser');
+       return;
+     }
+ 
+-    startRecording();
++    /**
++     * Not recording (variant A): only arm the device. Acquiring the stream now
++     * makes Firefox prompt for access when this device has not been granted
++     * yet; we immediately release it so no hot mic stays open.
++     */
++    try {
++      const stream = await requestAudioStream(deviceId);
++      stream.getTracks().forEach((track) => track.stop());
++      await refreshBrowserCaptureDevices();
++    } catch (error) {
++      handleCaptureError(error instanceof Error ? error : new Error(String(error)));
++    }
+   };
+ 
+-  const externalStopRecording = () => {
+-    if (!isListening) {
+-      showToast({
+-        message: 'Not currently recording. Please start recording first.',
+-        status: 'warning',
+-      });
++  useEffect(() => {
++    const mediaDevices = navigator.mediaDevices;
++    if (!mediaDevices?.addEventListener) {
+       return;
+     }
+-
+-    stopRecording();
+-  };
++    const handleDeviceChange = () => {
++      void refreshBrowserCaptureDevices();
++    };
++    mediaDevices.addEventListener('devicechange', handleDeviceChange);
++    return () => mediaDevices.removeEventListener('devicechange', handleDeviceChange);
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, []);
++
++  useEffect(
++    () => () => {
++      mountedRef.current = false;
++      discardRecordingRef.current = true;
++      const recorder = mediaRecorderRef.current;
++      if (recorder?.state === 'recording') {
++        recorder.stop();
++      }
++      if (animationFrameIdRef.current !== null) {
++        window.cancelAnimationFrame(animationFrameIdRef.current);
++      }
++      if (audioContextRef.current) {
++        void audioContextRef.current.close();
++      }
++      audioStreamRef.current?.getTracks().forEach((track) => track.stop());
++      audioStreamRef.current = null;
++      mediaRecorderRef.current = null;
++      recordingSourceRef.current = null;
++    },
++    [],
++  );
+ 
+   return {
+-    isListening,
+-    externalStopRecording,
+-    externalStartRecording,
+-    isLoading: isProcessing,
++    isListening: recordingSource === 'microphone',
++    isLoading: requestingSource === 'microphone' || finalizingSource === 'microphone',
++    externalStartRecording: () => startRecording('microphone'),
++    externalStopRecording: () => stopRecording('microphone'),
++    isBrowserAudioListening: recordingSource === 'browser',
++    isBrowserAudioLoading: requestingSource === 'browser' || finalizingSource === 'browser',
++    startBrowserAudioRecording: () => startRecording('browser'),
++    stopBrowserAudioRecording: () => stopRecording('browser'),
++    browserCaptureDevices,
++    selectedBrowserCaptureDeviceId,
++    loadBrowserCaptureDevices,
++    selectBrowserCaptureDevice,
+   };
+ };
+ 
+diff --git a/client/src/locales/en/translation.json b/client/src/locales/en/translation.json
+index 446501702..26b0e79f3 100644
+--- a/client/src/locales/en/translation.json
++++ b/client/src/locales/en/translation.json
+@@ -2898,5 +2898,11 @@
+   "com_insights_invalid_date_range": "Choose an end date after the start date, within {{days}} days.",
+   "com_insights_sparkline_accessibility": "{{label}} over time",
+   "com_nav_mobile_drawer_strip": "Show chat beside the sidebar on mobile",
+-  "com_nav_mobile_drawer_strip_info": "The sidebar stops short of the edge so a strip of the conversation stays visible. Tapping it closes the sidebar."
++  "com_nav_mobile_drawer_strip_info": "The sidebar stops short of the edge so a strip of the conversation stays visible. Tapping it closes the sidebar.",
++  "com_ui_thinking_effort": "Thinking effort",
++  "com_ui_thinking_effort_low": "Low",
++  "com_ui_thinking_effort_medium": "Medium",
++  "com_ui_thinking_effort_high": "High",
++  "com_ui_thinking_effort_max": "Max",
++  "com_ui_thinking_effort_xhigh": "XHigh"
+ }
+diff --git a/client/src/locales/ru/translation.json b/client/src/locales/ru/translation.json
+index 61ca46e97..9c2a3b175 100644
+--- a/client/src/locales/ru/translation.json
++++ b/client/src/locales/ru/translation.json
+@@ -1220,6 +1220,12 @@
+   "com_ui_terms_and_conditions": "Условия использования",
+   "com_ui_terms_of_service": "Условия использования",
+   "com_ui_thinking": "Рассуждаю...",
++  "com_ui_thinking_effort": "Уровень рассуждения",
++  "com_ui_thinking_effort_high": "Высокий",
++  "com_ui_thinking_effort_low": "Низкий",
++  "com_ui_thinking_effort_max": "Максимальный",
++  "com_ui_thinking_effort_medium": "Средний",
++  "com_ui_thinking_effort_xhigh": "Сверхвысокий",
+   "com_ui_thoughts": "Мысли",
+   "com_ui_token": "токен",
+   "com_ui_token_exchange_method": "Метод обмена токена",
+diff --git a/packages/data-provider/specs/bedrock.spec.ts b/packages/data-provider/specs/bedrock.spec.ts
+index 317972315..8452ede99 100644
+--- a/packages/data-provider/specs/bedrock.spec.ts
++++ b/packages/data-provider/specs/bedrock.spec.ts
+@@ -1569,6 +1569,26 @@ describe('bedrockInputParser', () => {
+   });
+ 
+   describe('Model switching cleanup', () => {
++    test.each([
++      ['top-level', { useResponsesApi: true }],
++      ['additionalModelRequestFields', { additionalModelRequestFields: { useResponsesApi: true } }],
++    ])('should strip stale OpenAI useResponsesApi from %s', (_source, staleParameters) => {
++      const parsed = bedrockInputParser.parse({
++        model: 'us.anthropic.claude-opus-5',
++        effort: 'high',
++        ...staleParameters,
++      }) as Record<string, unknown>;
++      const parsedAmrf = parsed.additionalModelRequestFields as Record<string, unknown> | undefined;
++
++      expect(parsed.useResponsesApi).toBeUndefined();
++      expect(parsedAmrf?.useResponsesApi).toBeUndefined();
++
++      const output = bedrockOutputParser(parsed);
++      const outputAmrf = output.additionalModelRequestFields as Record<string, unknown> | undefined;
++      expect(output.useResponsesApi).toBeUndefined();
++      expect(outputAmrf?.useResponsesApi).toBeUndefined();
++    });
++
+     test('should strip anthropic_beta when switching from Anthropic to non-Anthropic model', () => {
+       const staleConversationData = {
+         model: 'openai.gpt-oss-120b-1:0',
+diff --git a/packages/data-provider/specs/effort.spec.ts b/packages/data-provider/specs/effort.spec.ts
+new file mode 100644
+index 000000000..20bf2b4fa
+--- /dev/null
++++ b/packages/data-provider/specs/effort.spec.ts
+@@ -0,0 +1,216 @@
++import { findActiveModelSpec, resolveEffortConfig } from '../src/effort';
++import { specsConfigSchema } from '../src/models';
++import type { EffortField, EffortValue, TModelSpec } from '../src/models';
++
++const CLAUDE_OPTIONS: EffortValue[] = ['low', 'medium', 'high', 'max'];
++const GPT_OPTIONS: EffortValue[] = ['low', 'medium', 'high', 'xhigh'];
++const OSS_OPTIONS: EffortValue[] = ['low', 'medium', 'high'];
++
++const spec = (
++  name: string,
++  field: EffortField,
++  options: EffortValue[],
++  model: string,
++  endpoint = 'bedrock',
++): TModelSpec =>
++  ({
++    name,
++    label: name,
++    effortSelector: { field, options },
++    preset: { endpoint, model, [field]: 'medium' },
++  }) as unknown as TModelSpec;
++
++const bare = (name: string, model: string): TModelSpec =>
++  ({ name, label: name, preset: { endpoint: 'bedrock', model } }) as unknown as TModelSpec;
++
++const specs: TModelSpec[] = [
++  spec('opus-5', 'effort', CLAUDE_OPTIONS, 'us.anthropic.claude-opus-5'),
++  spec('sonnet-5', 'effort', CLAUDE_OPTIONS, 'us.anthropic.claude-sonnet-5'),
++  spec('opus-4-6', 'effort', CLAUDE_OPTIONS, 'us.anthropic.claude-opus-4-6-v1'),
++  spec('gpt-5.6-sol', 'reasoning_effort', GPT_OPTIONS, 'openai.gpt-5.6-sol', 'Bedrock-OpenAI'),
++  spec('gpt-5.6-luna', 'reasoning_effort', GPT_OPTIONS, 'openai.gpt-5.6-luna', 'Bedrock-OpenAI'),
++  spec('glm-5', 'reasoning_effort', OSS_OPTIONS, 'zai.glm-5'),
++  spec('kimi-k2-5', 'reasoning_effort', OSS_OPTIONS, 'moonshotai.kimi-k2.5'),
++  bare('qwen3-235b', 'qwen.qwen3-235b-a22b-2507-v1:0'),
++  bare('qwen3-vl', 'qwen.qwen3-vl-235b-a22b'),
++];
++
++const byName = (name: string) => specs.find((s) => s.name === name);
++
++describe('resolveEffortConfig', () => {
++  it.each([
++    ['opus-5', 'effort', CLAUDE_OPTIONS],
++    ['sonnet-5', 'effort', CLAUDE_OPTIONS],
++    ['opus-4-6', 'effort', CLAUDE_OPTIONS],
++    ['gpt-5.6-sol', 'reasoning_effort', GPT_OPTIONS],
++    ['gpt-5.6-luna', 'reasoning_effort', GPT_OPTIONS],
++    ['glm-5', 'reasoning_effort', OSS_OPTIONS],
++    ['kimi-k2-5', 'reasoning_effort', OSS_OPTIONS],
++  ] as [string, EffortField, EffortValue[]][])(
++    '%s defaults to medium on a new conversation',
++    (name, field, options) => {
++      expect(resolveEffortConfig(byName(name), {})).toEqual({
++        field,
++        options,
++        defaultValue: 'medium',
++        selectedValue: 'medium',
++      });
++    },
++  );
++
++  it.each(['qwen3-235b', 'qwen3-vl'])('returns null for %s (no effortSelector)', (name) => {
++    expect(resolveEffortConfig(byName(name), {})).toBeNull();
++  });
++
++  it('returns null for a missing spec', () => {
++    expect(resolveEffortConfig(undefined, { effort: 'high' })).toBeNull();
++  });
++
++  it('keeps a stored value that the spec offers', () => {
++    expect(resolveEffortConfig(byName('sonnet-5'), { effort: 'high' })?.selectedValue).toBe('high');
++  });
++
++  it('falls back to the preset default when the stored value is not offered', () => {
++    expect(resolveEffortConfig(byName('glm-5'), { reasoning_effort: 'xhigh' })?.selectedValue).toBe(
++      'medium',
++    );
++  });
++
++  it('falls back to the first option when the preset default is invalid', () => {
++    const broken = {
++      effortSelector: { field: 'effort' as EffortField, options: ['low', 'high'] as EffortValue[] },
++      preset: { effort: 'nope' },
++    };
++    expect(resolveEffortConfig(broken, {})?.selectedValue).toBe('low');
++  });
++
++  describe('model switching', () => {
++    it('carries a supported value across effort families', () => {
++      expect(resolveEffortConfig(byName('gpt-5.6-luna'), { effort: 'high' })?.selectedValue).toBe(
++        'high',
++      );
++      expect(
++        resolveEffortConfig(byName('glm-5'), { reasoning_effort: 'high' })?.selectedValue,
++      ).toBe('high');
++    });
++
++    it('falls back when the carried value is unsupported', () => {
++      expect(resolveEffortConfig(byName('gpt-5.6-luna'), { effort: 'max' })?.selectedValue).toBe(
++        'medium',
++      );
++      expect(
++        resolveEffortConfig(byName('sonnet-5'), { reasoning_effort: 'xhigh' })?.selectedValue,
++      ).toBe('medium');
++    });
++
++    it('hides on Qwen and restores the value on return', () => {
++      const params = { reasoning_effort: 'xhigh' };
++      expect(resolveEffortConfig(byName('qwen3-vl'), params)).toBeNull();
++      expect(resolveEffortConfig(byName('gpt-5.6-luna'), params)?.selectedValue).toBe('xhigh');
++    });
++
++    it('uses the new default when nothing is stored', () => {
++      expect(resolveEffortConfig(byName('kimi-k2-5'), {})?.selectedValue).toBe('medium');
++    });
++  });
++});
++
++describe('findActiveModelSpec', () => {
++  it('resolves by spec name', () => {
++    expect(findActiveModelSpec(specs, { spec: 'glm-5' })?.name).toBe('glm-5');
++  });
++
++  it('resolves by exact endpoint and model', () => {
++    expect(
++      findActiveModelSpec(specs, { endpoint: 'Bedrock-OpenAI', model: 'openai.gpt-5.6-sol' })?.name,
++    ).toBe('gpt-5.6-sol');
++  });
++
++  it('never resolves by label', () => {
++    expect(findActiveModelSpec(specs, { spec: 'GLM-5' })).toBeUndefined();
++  });
++
++  it('does not match on endpoint alone', () => {
++    expect(findActiveModelSpec(specs, { endpoint: 'bedrock' })).toBeUndefined();
++  });
++});
++
++describe('effortSelector config validation', () => {
++  const parse = (spec: unknown) => specsConfigSchema.safeParse({ list: [spec] });
++
++  it('accepts a valid Claude selector and passes metadata through', () => {
++    const result = parse(byName('opus-5'));
++    expect(result.success).toBe(true);
++    if (result.success) {
++      expect(result.data.list[0].effortSelector).toEqual({
++        field: 'effort',
++        options: CLAUDE_OPTIONS,
++      });
++    }
++  });
++
++  it('accepts specs without a selector', () => {
++    expect(parse(byName('qwen3-vl')).success).toBe(true);
++  });
++
++  it.each([
++    [
++      'a preset default outside options',
++      {
++        name: 'bad-default',
++        label: 'x',
++        effortSelector: { field: 'reasoning_effort', options: OSS_OPTIONS },
++        preset: { endpoint: 'bedrock', model: 'zai.glm-5', reasoning_effort: 'xhigh' },
++      },
++      'must be one of effortSelector.options',
++    ],
++    [
++      'a missing preset default',
++      {
++        name: 'no-default',
++        label: 'x',
++        effortSelector: { field: 'effort', options: CLAUDE_OPTIONS },
++        preset: { endpoint: 'bedrock', model: 'm' },
++      },
++      'must be set when effortSelector.field',
++    ],
++    [
++      'duplicate options',
++      {
++        name: 'dupes',
++        label: 'x',
++        effortSelector: { field: 'effort', options: ['low', 'low'] },
++        preset: { endpoint: 'bedrock', model: 'm', effort: 'low' },
++      },
++      'must not contain duplicates',
++    ],
++  ])('rejects %s', (_case, spec, message) => {
++    const result = parse(spec);
++    expect(result.success).toBe(false);
++    if (!result.success) {
++      expect(result.error.issues.some((issue) => issue.message.includes(message))).toBe(true);
++    }
++  });
++
++  it('rejects an empty options list', () => {
++    expect(
++      parse({
++        name: 'empty',
++        label: 'x',
++        effortSelector: { field: 'effort', options: [] },
++        preset: { endpoint: 'bedrock', model: 'm', effort: 'low' },
++      }).success,
++    ).toBe(false);
++  });
++
++  it('rejects an unknown field name', () => {
++    expect(
++      parse({
++        name: 'bad-field',
++        label: 'x',
++        effortSelector: { field: 'thinkingEffort', options: ['low'] },
++        preset: { endpoint: 'bedrock', model: 'm' },
++      }).success,
++    ).toBe(false);
++  });
++});
+diff --git a/packages/data-provider/src/bedrock.ts b/packages/data-provider/src/bedrock.ts
+index 114cec916..d9c17786c 100644
+--- a/packages/data-provider/src/bedrock.ts
++++ b/packages/data-provider/src/bedrock.ts
+@@ -673,12 +673,14 @@ export const bedrockInputParser = s.tConversationSchema
+     const isAnthropicModel =
+       typeof typedData.model === 'string' && isBedrockClaudeModel(typedData.model);
+ 
+-    /** Strip stale fields from previously-persisted additionalModelRequestFields */
++    /** Strip stale provider-specific fields from switched and persisted model parameters */
++    delete additionalFields.useResponsesApi;
+     if (
+       typeof typedData.additionalModelRequestFields === 'object' &&
+       typedData.additionalModelRequestFields != null
+     ) {
+       const amrf = typedData.additionalModelRequestFields as Record<string, unknown>;
++      delete amrf.useResponsesApi;
+       if (!isAnthropicModel) {
+         delete amrf.anthropic_beta;
+         delete amrf.thinking;
+diff --git a/packages/data-provider/src/effort.ts b/packages/data-provider/src/effort.ts
+new file mode 100644
+index 000000000..902218a86
+--- /dev/null
++++ b/packages/data-provider/src/effort.ts
+@@ -0,0 +1,105 @@
++import type { EffortField, EffortValue, EffortSelectorConfig, TModelSpec } from './models';
++import { effortValues } from './models';
++
++export type ResolvedEffortConfig = {
++  field: EffortField;
++  options: EffortValue[];
++  defaultValue: EffortValue;
++  selectedValue: EffortValue;
++};
++
++/** The sibling param a spec of the opposite family writes to. Used only to
++ *  carry a user's choice across a model switch; never written alongside. */
++const siblingField: Record<EffortField, EffortField> = {
++  effort: 'reasoning_effort',
++  reasoning_effort: 'effort',
++};
++
++const effortValueSet = new Set<string>(effortValues);
++
++export function isEffortValue(value: unknown): value is EffortValue {
++  return typeof value === 'string' && effortValueSet.has(value);
++}
++
++/** Structural params so `TConversation`, `TPreset` and `TModelSpecPreset` all
++ *  satisfy them without a cast at the call site. */
++type EffortParams = {
++  effort?: unknown;
++  reasoning_effort?: unknown;
++};
++
++type EffortSpec = {
++  effortSelector?: EffortSelectorConfig;
++  preset?: EffortParams | null;
++};
++
++/**
++ * Resolves the effort control state for the active modelSpec.
++ *
++ * `params` is the conversation (or preset) the value is read from. Precedence:
++ *   1. the spec's own field, when its value is offered by this spec
++ *   2. the sibling field, when its value is offered by this spec — this is what
++ *      makes `Claude/high -> GPT/high` carry over while `Claude/max -> GPT`
++ *      falls back, since `max` is not a GPT option
++ *   3. `preset[field]`, the single source of the default
++ *
++ * Returns `null` when the spec opts out (no `effortSelector`), which is the
++ * signal for the UI to render nothing and for callers to touch no effort field.
++ */
++export function resolveEffortConfig(
++  modelSpec?: EffortSpec | null,
++  params?: EffortParams | null,
++): ResolvedEffortConfig | null {
++  const selector = modelSpec?.effortSelector;
++  if (!selector) {
++    return null;
++  }
++
++  const { field, options } = selector;
++  const presetDefault = modelSpec?.preset?.[field];
++  /** Config validation guarantees this, but public config is not re-validated
++   *  client-side; fall back to the first option rather than rendering empty. */
++  const defaultValue: EffortValue = isEffortValue(presetDefault)
++    ? presetDefault
++    : (options[0] as EffortValue);
++
++  const current = params?.[field];
++  if (isEffortValue(current) && options.includes(current)) {
++    return { field, options, defaultValue, selectedValue: current };
++  }
++
++  const carried = params?.[siblingField[field]];
++  if (isEffortValue(carried) && options.includes(carried)) {
++    return { field, options, defaultValue, selectedValue: carried };
++  }
++
++  return { field, options, defaultValue, selectedValue: defaultValue };
++}
++
++/**
++ * Resolves the active spec by stable identity: the persisted spec name first,
++ * then an exact endpoint + provider model match. Labels are never matched.
++ */
++export function findActiveModelSpec(
++  specs?: TModelSpec[] | null,
++  params?: { spec?: string | null; endpoint?: string | null; model?: string | null } | null,
++): TModelSpec | undefined {
++  if (!specs?.length || !params) {
++    return undefined;
++  }
++
++  const specName = params.spec;
++  if (specName != null && specName !== '') {
++    const byName = specs.find((spec) => spec.name === specName);
++    if (byName) {
++      return byName;
++    }
++  }
++
++  const { endpoint, model } = params;
++  if (endpoint == null || endpoint === '' || model == null || model === '') {
++    return undefined;
++  }
++
++  return specs.find((spec) => spec.preset?.endpoint === endpoint && spec.preset?.model === model);
++}
+diff --git a/packages/data-provider/src/index.ts b/packages/data-provider/src/index.ts
+index 273053378..66a064d13 100644
+--- a/packages/data-provider/src/index.ts
++++ b/packages/data-provider/src/index.ts
+@@ -20,6 +20,7 @@ export * from './parsers';
+ /* custom/dynamic configurations  */
+ export * from './generate';
+ export * from './models';
++export * from './effort';
+ /* mcp */
+ export * from './mcp';
+ /* RBAC */
+diff --git a/packages/data-provider/src/models.ts b/packages/data-provider/src/models.ts
+index de7fb5d33..1b0b29d81 100644
+--- a/packages/data-provider/src/models.ts
++++ b/packages/data-provider/src/models.ts
+@@ -82,6 +82,7 @@ export type TModelSpec = {
+   mcpServers?: string[];
+   skills?: boolean | string[];
+   subagents?: ModelSpecSubagentsConfig;
++  effortSelector?: EffortSelectorConfig;
+ };
+ 
+ export const modelSpecSubagentsSchema = z
+@@ -102,6 +103,23 @@ export const modelSpecSubagentsSchema = z
+     }
+   });
+ 
++export const effortValues = ['low', 'medium', 'high', 'max', 'xhigh'] as const;
++export type EffortValue = (typeof effortValues)[number];
++
++export const effortFields = ['effort', 'reasoning_effort'] as const;
++export type EffortField = (typeof effortFields)[number];
++
++export type EffortSelectorConfig = {
++  field: EffortField;
++  options: EffortValue[];
++};
++
++/** UI metadata for the inline composer thinking-effort selector. */
++export const effortSelectorSchema = z.object({
++  field: z.enum(effortFields),
++  options: z.array(z.enum(effortValues)).min(1),
++});
++
+ /**
+  * The endpoint a spec targets. Only the agents endpoint can serve a preset that
+  * names an `agent_id`, so an omitted `endpoint` is inferred rather than left
+@@ -205,13 +223,47 @@ export const tModelSpecSchema = z.object({
+   mcpServers: z.array(z.string()).optional(),
+   skills: z.union([z.boolean(), z.array(z.string())]).optional(),
+   subagents: modelSpecSubagentsSchema.optional(),
++  effortSelector: effortSelectorSchema.optional(),
+ });
+ 
+-export const specsConfigSchema = z.object({
+-  enforce: z.boolean().default(false),
+-  prioritize: z.boolean().default(true),
+-  list: z.array(tModelSpecSchema).default([]),
+-  addedEndpoints: z.array(z.union([z.string(), eModelEndpointSchema])).optional(),
+-});
++export const specsConfigSchema = z
++  .object({
++    enforce: z.boolean().default(false),
++    prioritize: z.boolean().default(true),
++    list: z.array(tModelSpecSchema).default([]),
++    addedEndpoints: z.array(z.union([z.string(), eModelEndpointSchema])).optional(),
++  })
++  .superRefine((config, ctx) => {
++    config.list?.forEach((spec, index) => {
++      const selector = spec.effortSelector;
++      if (!selector) {
++        return;
++      }
++
++      const addIssue = (message: string, key = 'effortSelector') =>
++        ctx.addIssue({
++          code: z.ZodIssueCode.custom,
++          path: ['list', index, key],
++          message: `modelSpec "${spec.name}": ${message}`,
++        });
++
++      if (new Set(selector.options).size !== selector.options.length) {
++        addIssue('effortSelector.options must not contain duplicates');
++      }
++
++      const presetDefault = (spec.preset as Record<string, unknown> | undefined)?.[selector.field];
++      if (presetDefault == null || presetDefault === '') {
++        addIssue(
++          `preset.${selector.field} must be set when effortSelector.field is "${selector.field}"`,
++          'preset',
++        );
++        return;
++      }
++
++      if (!selector.options.includes(presetDefault as EffortValue)) {
++        addIssue(`preset.${selector.field} must be one of effortSelector.options`, 'preset');
++      }
++    });
++  });
+ 
+ export type TSpecsConfig = z.infer<typeof specsConfigSchema>;
