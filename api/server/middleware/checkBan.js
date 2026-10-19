@@ -1,9 +1,10 @@
 const { Keyv } = require('keyv');
 const uap = require('ua-parser-js');
 const { logger } = require('@librechat/data-schemas');
-const { ViolationTypes } = require('librechat-data-provider');
-const { isEnabled, keyvMongo, removePorts } = require('@librechat/api');
+const { ErrorTypes, ViolationTypes } = require('librechat-data-provider');
+const { isEnabled, keyvMongo, removePorts, getBanIp } = require('@librechat/api');
 const { getLogStores } = require('~/cache');
+const { isOAuthNavigation, redirectOAuthFailure } = require('./oauthNavigation');
 const denyRequest = require('./denyRequest');
 const { findUser } = require('~/models');
 
@@ -50,9 +51,13 @@ const isInteractiveAgentChatRequest = (req) => {
  * @param {Object} req - Express Request object.
  * @param {Object} res - Express Response object.
  *
- * @returns {Promise<Object>} - Returns a Promise which sends a JSON 403 unless this is an interactive browser agent chat request, in which case it calls `denyRequest()`.
+ * @returns {Promise<Object>} - Returns a Promise which sends a JSON 403, unless this is an interactive browser agent chat request (`denyRequest()`) or an OAuth browser navigation (redirect to the login page).
  */
 const banResponse = async (req, res) => {
+  if (isOAuthNavigation(req)) {
+    return redirectOAuthFailure(res, ErrorTypes.AUTH_BANNED);
+  }
+
   const ua = uap(req.headers['user-agent']);
   if (!ua.browser.name) {
     return res.status(403).json({ message });
@@ -83,19 +88,20 @@ const checkBan = async (req, res, next = () => {}) => {
     }
 
     req.ip = removePorts(req);
-    let userId = req.user?.id ?? req.user?._id ?? null;
+    const banIp = getBanIp(req);
+    let userId = req.user?.id ?? req.user?._id?.toString() ?? null;
 
     if (!userId && req?.body?.email) {
       const user = await findUser({ email: req.body.email }, '_id');
       userId = user?._id ? user._id.toString() : userId;
     }
 
-    if (!userId && !req.ip) {
+    if (!userId && !banIp) {
       return next();
     }
 
     const useRedis = isEnabled(process.env.USE_REDIS);
-    const ipKey = getBanCacheKey('ip', req.ip, useRedis);
+    const ipKey = getBanCacheKey('ip', banIp, useRedis);
     const userKey = getBanCacheKey('user', userId, useRedis);
 
     const [cachedIPBan, cachedUserBan] = await Promise.all([
@@ -116,7 +122,7 @@ const checkBan = async (req, res, next = () => {}) => {
     }
 
     const [ipBan, userBan] = await Promise.all([
-      req.ip ? banLogs.get(req.ip) : undefined,
+      banIp ? banLogs.get(banIp) : undefined,
       userId ? banLogs.get(userId) : undefined,
     ]);
 
@@ -137,7 +143,7 @@ const checkBan = async (req, res, next = () => {}) => {
     if (timeLeft <= 0) {
       const cleanups = [];
       if (ipBan) {
-        cleanups.push(banLogs.delete(req.ip));
+        cleanups.push(banLogs.delete(banIp));
       }
       if (userBan) {
         cleanups.push(banLogs.delete(userId));

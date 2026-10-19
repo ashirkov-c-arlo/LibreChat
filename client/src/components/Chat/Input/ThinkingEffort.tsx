@@ -75,7 +75,7 @@ function ThinkingEffortSelector() {
         render={
           <Ariakit.MenuButton
             store={menu}
-            type="button"
+            render={<button type="button" />}
             data-testid="thinking-effort"
             aria-label={controlLabel}
             disabled={isSubmitting}

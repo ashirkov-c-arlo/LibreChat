@@ -74,7 +74,16 @@ function normalizeMemoryLLMConfig(llmConfig?: Partial<LLMConfig>): SanitizedMemo
 }
 
 export const memoryInstructions =
-  'The system automatically stores important user information and can update or delete memories based on user requests, enabling dynamic memory management.';
+  'Persistent memory is available across conversations within the current memory scope. Saved memories, if any, are shown below. No entries shown here does not mean memory is unavailable. Use memory tools only if provided; claim a memory was saved or deleted only after the action is confirmed.';
+
+export function formatMemoryContext(memory: string | undefined): string | undefined {
+  if (memory == null) {
+    return undefined;
+  }
+  return memory
+    ? `${memoryInstructions}\n\n# Existing memory about the user:\n${memory}`
+    : memoryInstructions;
+}
 
 export const SET_MEMORY_TOOL_NAME = 'set_memory';
 export const DELETE_MEMORY_TOOL_NAME = 'delete_memory';
@@ -113,7 +122,7 @@ The \`delete_memory\` tool should only be used in two scenarios:
 
 ${validKeys && validKeys.length > 0 ? `\nVALID KEYS: ${validKeys.join(', ')}` : ''}
 
-${tokenLimit ? `\nTOKEN LIMIT: Maximum ${tokenLimit} tokens per memory value.` : ''}
+${tokenLimit ? `\nTOKEN LIMIT: Maximum ${tokenLimit} tokens across all memory values.` : ''}
 
 When in doubt, and the user hasn't asked to remember or forget anything, END THE TURN IMMEDIATELY.`;
 
@@ -130,6 +139,7 @@ export const createMemoryTool = ({
   charLimit,
   tokenLimit,
   totalTokens = 0,
+  tokenCountsByKey,
   filters,
   onWrite,
 }: {
@@ -141,6 +151,7 @@ export const createMemoryTool = ({
   charLimit?: number;
   tokenLimit?: number;
   totalTokens?: number;
+  tokenCountsByKey?: ReadonlyMap<string, number>;
   filters?: FiltersConfig;
   onWrite?: () => void;
 }): DynamicStructuredTool => {
@@ -150,10 +161,10 @@ export const createMemoryTool = ({
    *  check against the same stale total and collectively exceed `tokenLimit`. */
   let currentTotalTokens = totalTokens;
   let writeChain: Promise<unknown> = Promise.resolve();
-  /** Tokens this instance has already committed per key. `set_memory` upserts,
-   *  so a repeat write to the same key REPLACES its value — the running total
-   *  must swap the prior contribution for the new one, not add both. */
-  const writtenTokensByKey = new Map<string, number>();
+  /** Token counts are seeded from persisted memory and advanced after each
+   *  successful write. `set_memory` upserts, so every write replaces this
+   *  key's prior contribution instead of adding both values to the total. */
+  const currentTokensByKey = new Map(tokenCountsByKey);
 
   return tool(
     async ({ key, value }) => {
@@ -188,9 +199,9 @@ export const createMemoryTool = ({
           }
 
           const tokenCount = Tokenizer.getTokenCount(value, 'o200k_base');
-          /** Total excluding this key's prior in-instance write, so a same-key
-           *  rewrite is measured as a replacement rather than an addition. */
-          const baseTotalTokens = currentTotalTokens - (writtenTokensByKey.get(key) ?? 0);
+          /** Total excluding this key's prior persisted or in-instance value,
+           *  so a rewrite is measured as a replacement rather than an addition. */
+          const baseTotalTokens = currentTotalTokens - (currentTokensByKey.get(key) ?? 0);
           const remainingTokens = tokenLimit ? tokenLimit - baseTotalTokens : Infinity;
 
           if (tokenLimit && remainingTokens <= 0) {
@@ -247,7 +258,7 @@ export const createMemoryTool = ({
           if (result.ok) {
             if (tokenLimit) {
               currentTotalTokens = newTotalTokens;
-              writtenTokensByKey.set(key, tokenCount);
+              currentTokensByKey.set(key, tokenCount);
             }
             onWrite?.();
             logger.debug(`Memory set for key "${key}" (${tokenCount} tokens) for user "${userId}"`);
@@ -503,7 +514,7 @@ export function agentHasInlineMemoryTools(agent: InlineMemoryAgent): boolean {
   );
 }
 
-/** Builds the existing-memory system context for an inline-memory agent. */
+/** Builds the memory system context for an inline-memory agent. */
 export async function buildInlineMemoryContext({
   agent,
   req,
@@ -527,9 +538,7 @@ export async function buildInlineMemoryContext({
       agentId: getMemoryAgentId(agent),
       getFormattedMemories,
     });
-    return memories.withKeys
-      ? `${memoryInstructions}\n\n# Existing memory about the user:\n${memories.withKeys}`
-      : '';
+    return formatMemoryContext(memories.withKeys) ?? '';
   } catch (error) {
     logger.error('[memory] Error loading inline agent memory context', error);
     return '';
@@ -680,6 +689,7 @@ export async function buildInlineMemoryTool({
   const charLimit = memoryConfig?.charLimit as number | undefined;
   const tokenLimit = memoryConfig?.tokenLimit as number | undefined;
   let totalTokens = 0;
+  let tokenCountsByKey: ReadonlyMap<string, number> | undefined;
   if (tokenLimit) {
     try {
       const formatted = await getRequestMemories({
@@ -688,7 +698,12 @@ export async function buildInlineMemoryTool({
         agentId: memoryAgentId,
         getFormattedMemories: memoryMethods.getFormattedMemories,
       });
-      totalTokens = formatted?.totalTokens ?? 0;
+      /** A formatted read failure has no trustworthy usage total. */
+      if (formatted.readFailed) {
+        return null;
+      }
+      totalTokens = formatted.totalTokens ?? 0;
+      tokenCountsByKey = formatted.tokenCountsByKey;
     } catch (error) {
       logger.error(
         '[memory] Failed to load memory token count for set_memory',
@@ -708,6 +723,7 @@ export async function buildInlineMemoryTool({
     charLimit,
     tokenLimit,
     totalTokens,
+    tokenCountsByKey,
     filters: req.config?.filters,
     onWrite: () => invalidateRequestMemories(req, memoryAgentId),
   });
@@ -754,10 +770,12 @@ export async function processMemory({
   llmConfig,
   tokenLimit,
   totalTokens = 0,
+  tokenCountsByKey,
   filters,
   streamId = null,
   jobCreatedAt,
   user,
+  tenantId,
 }: {
   res: ServerResponse;
   setMemory: MemoryMethods['setMemory'];
@@ -780,11 +798,13 @@ export async function processMemory({
   }[];
   tokenLimit?: number;
   totalTokens?: number;
+  tokenCountsByKey?: ReadonlyMap<string, number>;
   filters?: FiltersConfig;
   llmConfig?: Partial<LLMConfig>;
   streamId?: string | null;
   jobCreatedAt?: number;
   user?: IUser;
+  tenantId?: string;
 }): Promise<(TAttachment | null)[] | undefined> {
   try {
     const submittedMessages = (inspectionMessages ?? messages).filter(
@@ -813,6 +833,7 @@ export async function processMemory({
       setMemory,
       validKeys,
       totalTokens,
+      tokenCountsByKey,
       filters,
     });
     const deleteMemoryTool = createDeleteMemoryTool({
@@ -827,7 +848,7 @@ export async function processMemory({
     let memoryStatus = `# Existing memory:\n${memory ?? 'No existing memories'}`;
 
     if (tokenLimit) {
-      const remainingTokens = tokenLimit - currentMemoryTokens;
+      const remainingTokens = Math.max(tokenLimit - currentMemoryTokens, 0);
       memoryStatus = `# Memory Status:
 Current memory usage: ${currentMemoryTokens} tokens
 Token limit: ${tokenLimit} tokens
@@ -907,6 +928,7 @@ ${memory ?? 'No existing memories'}`;
     resolveConfigHeaders({
       llmConfig: finalLLMConfig as unknown as RunLLMConfig,
       user: user ? createSafeUser(user) : undefined,
+      tenantId,
       body: { conversationId, messageId },
     });
 
@@ -1014,11 +1036,13 @@ export async function createMemoryProcessor({
   messageId,
   memoryMethods,
   conversationId,
+  req,
   config = {},
   filters,
   streamId = null,
   jobCreatedAt,
   user,
+  tenantId,
 }: {
   res: ServerResponse;
   messageId: string;
@@ -1027,32 +1051,50 @@ export async function createMemoryProcessor({
   /** Agent partition; omit for the shared personal pool */
   agentId?: string;
   memoryMethods: RequiredMemoryMethods;
+  /** Reuses the request-scoped formatted snapshot for the chat context. */
+  req?: object;
   config?: MemoryConfig;
   filters?: FiltersConfig;
   streamId?: string | null;
   jobCreatedAt?: number;
   user?: IUser;
+  tenantId?: string;
 }): Promise<
-  [
-    string,
-    (
-      messages: BaseMessage[],
-      inspectionMessages?: BaseMessage[],
-    ) => Promise<(TAttachment | null)[] | undefined>,
-  ]
+  | [undefined, undefined]
+  | [
+      string,
+      (
+        messages: BaseMessage[],
+        inspectionMessages?: BaseMessage[],
+      ) => Promise<(TAttachment | null)[] | undefined>,
+    ]
 > {
   const { validKeys, instructions, llmConfig, tokenLimit } = config;
   const finalInstructions = instructions || getDefaultInstructions(validKeys, tokenLimit);
 
-  const [{ withKeys, withoutKeys, totalTokens }, memoryEntries] = await Promise.all([
-    memoryMethods.getFormattedMemories({
-      userId,
-      agentId,
+  const [formatted, memoryEntries] = await Promise.all([
+    (req
+      ? getRequestMemories({
+          req,
+          userId,
+          agentId,
+          getFormattedMemories: memoryMethods.getFormattedMemories,
+        })
+      : memoryMethods.getFormattedMemories({ userId, agentId })
+    ).catch((error) => {
+      logger.error('[memory] Error loading automatic memory context', getSafeErrorMetadata(error));
+      return undefined;
     }),
     hasActivePiiPatterns(filters?.memories?.pii)
       ? memoryMethods.getUserMemories({ userId, agentId })
       : Promise.resolve(undefined),
   ]);
+  /** Without the current memory snapshot we cannot safely seed token limits
+   *  or assert that no previous memories exist. Skip extraction for this turn. */
+  if (!formatted || formatted.readFailed) {
+    return [undefined, undefined];
+  }
+  const { withKeys, withoutKeys, totalTokens, tokenCountsByKey } = formatted;
 
   return [
     withoutKeys,
@@ -1077,11 +1119,13 @@ export async function createMemoryProcessor({
           memory: withKeys,
           memoryEntries,
           totalTokens: totalTokens || 0,
+          tokenCountsByKey,
           filters,
           instructions: finalInstructions,
           setMemory: memoryMethods.setMemory,
           deleteMemory: memoryMethods.deleteMemory,
           user,
+          tenantId,
         });
       } catch (error) {
         logger.error('Memory Agent failed to process memory', getSafeErrorMetadata(error));

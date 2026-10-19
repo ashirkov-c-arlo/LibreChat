@@ -15,6 +15,7 @@ import type {
   SubagentTaskSnapshot,
   SubagentTaskStartRequest,
   SubagentTaskStartResult,
+  SubagentTaskStore,
   SubagentUpdateEvent,
 } from '@librechat/agents';
 import type {
@@ -48,6 +49,7 @@ import { createSubagentAttemptKey, createSubagentThreadId } from './subagentThre
 import { runWithDetachedSubagentUsage } from './subagentTaskContext';
 import { SUBAGENT_COMPLETION_DELIVERY } from './subagentDelivery';
 import { createConcurrencyLimiter } from '~/utils/promise';
+import { projectSubagentActivity } from './activity';
 import { InMemoryEventTransport } from '~/stream';
 import { aggregateEmittedUsage } from './usage';
 
@@ -138,7 +140,13 @@ interface PreparedThread {
     content: string;
     taskId: string;
     parentRunId: string;
+    /** Original running task closed by a retry under a new terminal message id. */
+    previousTaskId?: string;
   };
+}
+
+interface HostSubagentTaskStartRequest extends SubagentTaskStartRequest {
+  completionDelivery?: typeof SUBAGENT_COMPLETION_DELIVERY;
 }
 
 type ThreadMessage = Pick<
@@ -256,7 +264,14 @@ export interface SubagentThreadTaskStoreOptions extends InMemorySubagentTaskStor
     taskId: string;
     tenantId?: string;
   }) => Promise<boolean>;
-  onTaskPrepared?: (registration: SubagentTaskWakeupRegistration) => Promise<void> | void;
+  onTaskPrepared?: (
+    registration: SubagentTaskWakeupRegistration,
+  ) => Promise<boolean | void> | boolean | void;
+  /** Called once a child's terminal message is durable, with the parent conversation its
+   * completion wake-up resumes. The child generation settles before that write, so the
+   * wake-up is ready only from here. Task ids include the original abandoned
+   * attempt when a retry persisted its result under a new id. */
+  onTaskSettled?: (userId: string, parentConversationId: string, taskIds: string[]) => void;
 }
 
 export interface SubagentTaskWakeupRegistration {
@@ -445,14 +460,23 @@ function serializeTranscript(
   };
 }
 
+function retentionContext(conversation: IConversation): {
+  isTemporary?: boolean;
+  expiredAt?: Date;
+} {
+  return {
+    ...(conversation.isTemporary == null ? {} : { isTemporary: conversation.isTemporary }),
+    ...(conversation.expiredAt == null ? {} : { expiredAt: conversation.expiredAt }),
+  };
+}
+
 function retentionFields(conversation: IConversation): {
   isTemporary?: boolean;
   expiredAt?: Date;
   tenantId?: string;
 } {
   return {
-    ...(conversation.isTemporary == null ? {} : { isTemporary: conversation.isTemporary }),
-    ...(conversation.expiredAt == null ? {} : { expiredAt: conversation.expiredAt }),
+    ...retentionContext(conversation),
     ...(conversation.tenantId == null ? {} : { tenantId: conversation.tenantId }),
   };
 }
@@ -601,6 +625,9 @@ export class SubagentThreadTaskStore extends InMemorySubagentTaskStore {
   private readonly releaseOwnerAdmission?: (userId: string, token: string) => Promise<void>;
   private readonly cancelUnroutedTask?: SubagentThreadTaskStoreOptions['cancelUnroutedTask'];
   private readonly onTaskPrepared?: SubagentThreadTaskStoreOptions['onTaskPrepared'];
+  private readonly onTaskSettled?: SubagentThreadTaskStoreOptions['onTaskSettled'];
+  /** Tasks whose completion wake-up was registered; only they announce settlement. */
+  private readonly wakeupTaskIds = new Set<string>();
   private taskControlTransport?: SubagentTaskControlTransport;
   private activityStream = new SubagentActivityStream(new InMemoryEventTransport());
 
@@ -643,6 +670,7 @@ export class SubagentThreadTaskStore extends InMemorySubagentTaskStore {
     this.releaseOwnerAdmission = options.releaseOwnerAdmission;
     this.cancelUnroutedTask = options.cancelUnroutedTask;
     this.onTaskPrepared = options.onTaskPrepared;
+    this.onTaskSettled = options.onTaskSettled;
   }
 
   /** Receives payload-free authoritative transitions from the SDK task store. */
@@ -1305,6 +1333,13 @@ export class SubagentThreadTaskStore extends InMemorySubagentTaskStore {
                 parentRunId: prepared.replay?.parentRunId ?? request.parentRunId,
                 createdAt: prepared.taskCreatedAt,
               });
+              if (prepared.replay != null) {
+                this.notifyTaskSettled(
+                  scope,
+                  prepared.replay.taskId,
+                  prepared.replay.previousTaskId,
+                );
+              }
               if (runtime.signal.aborted) {
                 throw runtime.signal.reason ?? new Error('Subagent task was cancelled.');
               }
@@ -1410,6 +1445,9 @@ export class SubagentThreadTaskStore extends InMemorySubagentTaskStore {
               }
               throw new Error(publicFailureDetail(error));
             } finally {
+              if (prepared != null) {
+                this.wakeupTaskIds.delete(prepared.replay?.taskId ?? runtime.taskId);
+              }
               if (prepared != null && prepared.replay == null) {
                 this.completeActivity(
                   lease,
@@ -2394,6 +2432,7 @@ export class SubagentThreadTaskStore extends InMemorySubagentTaskStore {
     userId: string,
     tenantId: string | undefined,
     deletion: () => Promise<T>,
+    recoverAdditionalOwnerWork?: () => Promise<void>,
   ): Promise<T> {
     const fenceWindowMs = this.ownerDrainTimeoutMs + this.ownerFenceGraceMs;
     const token = randomUUID();
@@ -2486,6 +2525,10 @@ export class SubagentThreadTaskStore extends InMemorySubagentTaskStore {
         fencedUntil = recoveryUntil;
         fenceLapsed = false;
         await this.cancelAndDrainForOwner(userId, tenantId);
+        /** The fence is shared by host-owned execution classes that do not use the
+         * subagent lease store. Let the caller re-drain those classes after the same
+         * lapse, while the restored fence still prevents fresh admission. */
+        await recoverAdditionalOwnerWork?.();
         if (!fenceHeld()) {
           throw new Error('The subagent admission fence expired while recovering this deletion.');
         }
@@ -2882,6 +2925,10 @@ export class SubagentThreadTaskStore extends InMemorySubagentTaskStore {
             replay: {
               status: terminal.subagentTask.status as 'completed' | 'error' | 'cancelled',
               taskId: canonicalTaskId,
+              ...(terminal.parentMessageId?.endsWith(':user') === true &&
+                terminal.parentMessageId !== `${canonicalTaskId}:user` && {
+                  previousTaskId: terminal.parentMessageId.slice(0, -':user'.length),
+                }),
               parentRunId: terminal.subagentTask.parentRunId ?? request.parentRunId,
               content:
                 terminal.text ??
@@ -2898,7 +2945,7 @@ export class SubagentThreadTaskStore extends InMemorySubagentTaskStore {
         const abandonedMessage =
           'Subagent task failed: The prior execution ended before its result could be persisted.';
         const savedAbandoned = await this.methods.saveMessage(
-          { userId: scope.userId },
+          { userId: scope.userId, ...retentionContext(conversation) },
           {
             messageId: `${taskId}:assistant`,
             conversationId: threadId,
@@ -2915,7 +2962,7 @@ export class SubagentThreadTaskStore extends InMemorySubagentTaskStore {
               ...(requestFingerprint == null ? {} : { requestFingerprint }),
               status: 'error',
             },
-            ...retentionFields(conversation),
+            ...(conversation.tenantId == null ? {} : { tenantId: conversation.tenantId }),
           },
           { context: 'SubagentThreadTaskStore.prepareThread.abandonedAttempt' },
         );
@@ -2936,6 +2983,9 @@ export class SubagentThreadTaskStore extends InMemorySubagentTaskStore {
             status: 'error',
             content: abandonedMessage,
             taskId,
+            ...(abandoned.messageId.endsWith(':user') && {
+              previousTaskId: abandoned.messageId.slice(0, -':user'.length),
+            }),
             parentRunId: request.parentRunId,
           },
         };
@@ -2959,7 +3009,7 @@ export class SubagentThreadTaskStore extends InMemorySubagentTaskStore {
       });
       const savedUserMessage = await observeSlowPreparation(
         this.methods.saveMessage(
-          { userId: scope.userId },
+          { userId: scope.userId, ...retentionContext(conversation) },
           {
             messageId: userMessageId,
             conversationId: threadId,
@@ -2974,7 +3024,7 @@ export class SubagentThreadTaskStore extends InMemorySubagentTaskStore {
               ...(requestFingerprint == null ? {} : { requestFingerprint }),
               status: 'running',
             },
-            ...retentionFields(conversation),
+            ...(conversation.tenantId == null ? {} : { tenantId: conversation.tenantId }),
           },
           { context: 'SubagentThreadTaskStore.prepareThread' },
         ),
@@ -3060,6 +3110,23 @@ export class SubagentThreadTaskStore extends InMemorySubagentTaskStore {
       prepared.initialStoredMessages,
       result.messages,
     );
+    const activityProjection =
+      subagentTranscript == null
+        ? undefined
+        : projectSubagentActivity(
+            subagentTranscript.messagesJson,
+            subagentTranscript.mode,
+            request.input,
+          );
+    const subagentActivityProjection =
+      activityProjection == null
+        ? undefined
+        : {
+            taskId,
+            version: 1 as const,
+            activityJson: JSON.stringify(activityProjection.activity),
+            truncated: activityProjection.truncated,
+          };
     const conversation = await this.requireCurrentConversation(
       scope,
       request,
@@ -3067,7 +3134,7 @@ export class SubagentThreadTaskStore extends InMemorySubagentTaskStore {
     );
     const usage = this.aggregateDetachedUsage(detachedUsage);
     const savedAssistantMessage = await this.methods.saveMessage(
-      { userId: scope.userId },
+      { userId: scope.userId, ...retentionContext(conversation) },
       {
         messageId: `${taskId}:assistant`,
         conversationId: conversation.conversationId,
@@ -3078,6 +3145,7 @@ export class SubagentThreadTaskStore extends InMemorySubagentTaskStore {
         isCreatedByUser: false,
         unfinished: false,
         ...(subagentTranscript == null ? {} : { subagentTranscript }),
+        ...(subagentActivityProjection == null ? {} : { subagentActivityProjection }),
         subagentTask: {
           attemptKey: prepared.attemptKey,
           parentRunId: request.parentRunId,
@@ -3087,7 +3155,7 @@ export class SubagentThreadTaskStore extends InMemorySubagentTaskStore {
           status: 'completed',
         },
         ...(usage == null ? {} : { metadata: { usage } }),
-        ...retentionFields(conversation),
+        ...(conversation.tenantId == null ? {} : { tenantId: conversation.tenantId }),
       },
       { context: 'SubagentThreadTaskStore.persistResult' },
     );
@@ -3112,7 +3180,7 @@ export class SubagentThreadTaskStore extends InMemorySubagentTaskStore {
     }
     const usage = this.aggregateDetachedUsage(detachedUsage);
     const savedFailure = await this.methods.saveMessage(
-      { userId: scope.userId },
+      { userId: scope.userId, ...retentionContext(conversation) },
       {
         messageId: `${taskId}:assistant`,
         conversationId: threadId,
@@ -3132,7 +3200,7 @@ export class SubagentThreadTaskStore extends InMemorySubagentTaskStore {
           status: 'error',
         },
         ...(usage == null ? {} : { metadata: { usage } }),
-        ...retentionFields(conversation),
+        ...(conversation.tenantId == null ? {} : { tenantId: conversation.tenantId }),
       },
       { context: 'SubagentThreadTaskStore.persistFailure' },
     );
@@ -3148,10 +3216,13 @@ export class SubagentThreadTaskStore extends InMemorySubagentTaskStore {
     request: SubagentTaskStartRequest,
     task: { taskId: string; parentRunId: string; createdAt: number },
   ): Promise<void> {
-    if (this.onTaskPrepared == null) {
+    if (
+      this.onTaskPrepared == null ||
+      (request as HostSubagentTaskStartRequest).completionDelivery !== SUBAGENT_COMPLETION_DELIVERY
+    ) {
       return;
     }
-    await this.onTaskPrepared({
+    const admitted = await this.onTaskPrepared({
       userId: scope.userId,
       parentConversationId: scope.parentConversationId,
       parentMessageId: task.parentRunId,
@@ -3162,6 +3233,9 @@ export class SubagentThreadTaskStore extends InMemorySubagentTaskStore {
       subagentType: request.subagentType,
       createdAt: task.createdAt,
     });
+    if (admitted !== false) {
+      this.wakeupTaskIds.add(task.taskId);
+    }
   }
 
   private async persistCancellation(
@@ -3178,7 +3252,7 @@ export class SubagentThreadTaskStore extends InMemorySubagentTaskStore {
     }
     const usage = this.aggregateDetachedUsage(detachedUsage);
     const savedCancellation = await this.methods.saveMessage(
-      { userId: scope.userId },
+      { userId: scope.userId, ...retentionContext(conversation) },
       {
         messageId: `${taskId}:assistant`,
         conversationId: threadId,
@@ -3197,7 +3271,7 @@ export class SubagentThreadTaskStore extends InMemorySubagentTaskStore {
           status: 'cancelled',
         },
         ...(usage == null ? {} : { metadata: { usage } }),
-        ...retentionFields(conversation),
+        ...(conversation.tenantId == null ? {} : { tenantId: conversation.tenantId }),
       },
       { context: 'SubagentThreadTaskStore.persistCancellation' },
     );
@@ -3334,6 +3408,26 @@ export class SubagentThreadTaskStore extends InMemorySubagentTaskStore {
       }
       logger.error(`[subagentThreads] Failed to refresh ${outcome} child thread`, error);
     }
+    this.notifyTaskSettled(scope, taskId);
+  }
+
+  private notifyTaskSettled(
+    scope: SubagentThreadScope,
+    taskId: string,
+    previousTaskId?: string,
+  ): void {
+    if (!this.wakeupTaskIds.delete(taskId)) {
+      return;
+    }
+    try {
+      this.onTaskSettled?.(
+        scope.userId,
+        scope.parentConversationId,
+        previousTaskId == null ? [taskId] : [taskId, previousTaskId],
+      );
+    } catch (error) {
+      logger.warn('[subagentThreads] Settled-task listener failed', error);
+    }
   }
 
   private aggregateDetachedUsage(detachedUsage: UsageMetadata[]) {
@@ -3397,13 +3491,47 @@ export function createSubagentThreadTaskStore(
   return new SubagentThreadTaskStore(methods, options);
 }
 
+type CompletionWakeupStore = SubagentTaskStore &
+  Pick<SubagentThreadTaskStore, 'claimTask' | 'controlTask' | 'hasTasks' | 'listTasks'>;
+
+const completionWakeupStores = new WeakMap<SubagentThreadTaskStore, CompletionWakeupStore>();
+
+function completionWakeupStore(store: SubagentThreadTaskStore): CompletionWakeupStore {
+  const existing = completionWakeupStores.get(store);
+  if (existing != null) {
+    return existing;
+  }
+  const adapter: CompletionWakeupStore = {
+    supportsThreadContinuation: store.supportsThreadContinuation,
+    start: (request) => {
+      const hostRequest: HostSubagentTaskStartRequest = {
+        ...request,
+        completionDelivery: SUBAGENT_COMPLETION_DELIVERY,
+      };
+      return store.start(hostRequest);
+    },
+    get: (scopeId, taskId) => store.get(scopeId, taskId),
+    list: (scopeId) => store.list(scopeId),
+    claim: (scopeId, taskId) => store.claim(scopeId, taskId),
+    control: (scopeId, taskId, command) => store.control(scopeId, taskId, command),
+    claimTask: (scopeId, taskId, invocationId) => store.claimTask(scopeId, taskId, invocationId),
+    controlTask: (scopeId, taskId, command, invocationId) =>
+      store.controlTask(scopeId, taskId, command, invocationId),
+    hasTasks: (scopeId) => store.hasTasks(scopeId),
+    listTasks: (scopeId) => store.listTasks(scopeId),
+  };
+  completionWakeupStores.set(store, adapter);
+  return adapter;
+}
+
 export function buildSubagentThreadTaskConfig(
   store: SubagentThreadTaskStore,
   scope: Omit<SubagentThreadScope, 'version'>,
   options: { completionWakeups?: boolean } = {},
 ): HostSubagentTaskConfig {
+  const taskStore = options.completionWakeups === true ? completionWakeupStore(store) : store;
   return {
-    store,
+    store: taskStore,
     scopeId: serializeScope(scope),
     ...(options.completionWakeups === true
       ? { completionDelivery: SUBAGENT_COMPLETION_DELIVERY }

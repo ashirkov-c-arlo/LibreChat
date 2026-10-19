@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import { context, ROOT_CONTEXT } from '@opentelemetry/api';
 import { logger, runAsSystem } from '@librechat/data-schemas';
 import type { AgentTriggerExecutionResult } from './host';
+import { createAgentTriggerBatchEnvelope } from './batch';
 import { AgentTriggerDispatchError } from './dispatch';
 import { AgentTriggerExecutionError } from './host';
 
@@ -12,8 +14,42 @@ const DEFAULT_RETRY_CAP_MS = 5 * 60_000;
 const DEFAULT_TICK_MS = 1_000;
 const DEFAULT_MAX_IDLE_TICK_MS = 15_000;
 const ORDERING_RECHECK_MS = 250;
+const ACTIVE_HANDLING_RECHECK_MS = 5_000;
 const DEFAULT_DEFER_MS = 5_000;
 const MAX_RETRY_AFTER_MS = 24 * 60 * 60_000;
+const MAX_FAILURE_CODE_LENGTH = 128;
+const MAX_FAILURE_MESSAGE_LENGTH = 2048;
+
+function startedHandling(
+  delivery: Pick<AgentTriggerDeliveryRecord, 'envelope'>,
+  result: AgentTriggerExecutionResult,
+  startedAt: Date,
+): AgentTriggerDeliveryRecord['handling'] | undefined {
+  const envelope = delivery.envelope;
+  if (
+    envelope == null ||
+    typeof envelope !== 'object' ||
+    !('mode' in envelope) ||
+    envelope.mode !== 'continue' ||
+    !('target' in envelope) ||
+    envelope.target == null ||
+    typeof envelope.target !== 'object' ||
+    !('bindingId' in envelope.target) ||
+    result.mode !== 'continue' ||
+    result.status === 'settled' ||
+    result.streamId == null ||
+    result.generationCreatedAt == null
+  ) {
+    return undefined;
+  }
+  return {
+    status: 'started',
+    conversationId: result.conversationId,
+    streamId: result.streamId,
+    generationCreatedAt: result.generationCreatedAt,
+    startedAt,
+  };
+}
 
 /** A pre-dispatch condition that must not consume the delivery's retry budget. */
 export class AgentTriggerDeliveryDeferredError extends Error {
@@ -26,7 +62,17 @@ export class AgentTriggerDeliveryDeferredError extends Error {
   }
 }
 
-export type AgentTriggerDeliveryStatus = 'staging' | 'pending' | 'leased' | 'succeeded' | 'dead';
+export type AgentTriggerDeliveryStatus =
+  | 'staging'
+  | 'capability_staging'
+  | 'batched'
+  | 'pending'
+  | 'capability_pending'
+  | 'leased'
+  | 'capability_leased'
+  | 'succeeded'
+  | 'capability_dead'
+  | 'dead';
 
 export interface AgentTriggerDeliveryFailure {
   code: string;
@@ -50,14 +96,35 @@ export interface AgentTriggerDeliveryRecord {
   attempts: number;
   availableAt: Date;
   createdAt: Date;
+  envelopeBytes?: number;
+  coalesceKey?: string;
+  coalesceFrom?: Date;
+  coalesceUntil?: Date;
+  batchSize?: number;
+  batchBytes?: number;
+  batchMemberIds?: Array<{ toString(): string } | string>;
+  batchRootId?: { toString(): string } | string;
+  batchMembersSettledAt?: Date;
+  awaitTerminalHandling?: boolean;
   leaseBy?: string;
   leaseUntil?: Date;
   lastError?: AgentTriggerDeliveryFailure;
+  handling?: {
+    status: 'started' | 'applied' | 'completed_no_action' | 'failed' | 'cancelled';
+    conversationId: string;
+    streamId: string;
+    generationCreatedAt: number;
+    startedAt: Date;
+    settledAt?: Date;
+    error?: string;
+    action?: { toolName: string; toolCallId?: string };
+  };
 }
 
 export interface AgentTriggerOrderingBlock {
   availableAt: Date;
   leaseUntil?: Date;
+  reason?: 'active_handling';
 }
 
 export interface AgentTriggerDeliveryStore {
@@ -70,6 +137,9 @@ export interface AgentTriggerDeliveryStore {
   findEarlierUnsettled: (
     delivery: AgentTriggerDeliveryRecord,
   ) => Promise<AgentTriggerOrderingBlock | null>;
+  getBatch: (
+    delivery: Pick<AgentTriggerDeliveryRecord, 'id' | 'batchMemberIds'>,
+  ) => Promise<Array<Pick<AgentTriggerDeliveryRecord, 'id' | 'deliveryKey' | 'envelope'>>>;
   release: (input: {
     id: string;
     workerId: string;
@@ -88,7 +158,7 @@ export interface AgentTriggerDeliveryStore {
     claimToken: string;
     attempt: number;
     availableAt: Date;
-  }) => Promise<boolean>;
+  }) => Promise<boolean | 'expedited'>;
   complete: (input: {
     id: string;
     workerId: string;
@@ -96,6 +166,8 @@ export interface AgentTriggerDeliveryStore {
     attempt: number;
     result: AgentTriggerExecutionResult;
     settledAt: Date;
+    handling?: AgentTriggerDeliveryRecord['handling'];
+    awaitTerminalHandling?: true;
   }) => Promise<boolean>;
   retry: (input: {
     id: string;
@@ -112,6 +184,7 @@ export interface AgentTriggerDeliveryStore {
     attempt: number;
     error: AgentTriggerDeliveryFailure;
     settledAt: Date;
+    receiptRetryAt?: Date;
   }) => Promise<boolean>;
 }
 
@@ -131,8 +204,14 @@ export interface AgentTriggerDeliveryEngineDeps {
   store: AgentTriggerDeliveryStore;
   dispatch: (
     envelope: unknown,
-    options?: { signal?: AbortSignal },
+    options?: { signal?: AbortSignal; attempt?: number; maxAttempts?: number },
   ) => Promise<AgentTriggerExecutionResult>;
+  /** Source-owned terminalization must commit before its delivery can become
+   * dead, including recovery after a crash that exhausted the attempt budget. */
+  settleSourceBeforeDeadLetter?: (
+    envelope: unknown,
+    failure: AgentTriggerDeliveryFailure,
+  ) => Promise<void>;
   now?: () => Date;
   random?: () => number;
   workerId?: string;
@@ -192,6 +271,42 @@ function failure(error: unknown, attemptedAt: Date): AgentTriggerDeliveryFailure
   };
 }
 
+function normalizeFailure(failure: AgentTriggerDeliveryFailure): AgentTriggerDeliveryFailure {
+  const code = failure.code.trim();
+  const message = failure.message.trim();
+  return {
+    ...failure,
+    code: (code.length === 0 ? 'DELIVERY_FAILED' : code).slice(0, MAX_FAILURE_CODE_LENGTH),
+    message: (message.length === 0 ? 'Agent trigger delivery failed' : message).slice(
+      0,
+      MAX_FAILURE_MESSAGE_LENGTH,
+    ),
+  };
+}
+
+/** The delay an execution error asked for, as seconds or an HTTP date, clamped. */
+function requestedRetryAfterMs(error: unknown, now: Date): number | undefined {
+  if (!(error instanceof AgentTriggerExecutionError) || error.retryAfter == null) {
+    return;
+  }
+  const seconds = Number(error.retryAfter);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(seconds * 1_000, MAX_RETRY_AFTER_MS);
+  }
+  const absolute = Date.parse(error.retryAfter);
+  if (Number.isFinite(absolute) && absolute > now.getTime()) {
+    return Math.min(absolute - now.getTime(), MAX_RETRY_AFTER_MS);
+  }
+  return;
+}
+
+/** A readiness deferral may ask to wait longer than the default re-check, never
+ * shorter: waiting producers back off by age, while every existing `retryAfter`
+ * below the default keeps the cadence it has always had. */
+function readinessDeferMs(error: unknown, now: Date): number {
+  return Math.max(DEFAULT_DEFER_MS, requestedRetryAfterMs(error, now) ?? 0);
+}
+
 function retryAt(
   error: unknown,
   attempt: number,
@@ -200,15 +315,9 @@ function retryAt(
   capMs: number,
   random: () => number,
 ): Date {
-  if (error instanceof AgentTriggerExecutionError && error.retryAfter != null) {
-    const seconds = Number(error.retryAfter);
-    if (Number.isFinite(seconds) && seconds >= 0) {
-      return new Date(now.getTime() + Math.min(seconds * 1_000, MAX_RETRY_AFTER_MS));
-    }
-    const absolute = Date.parse(error.retryAfter);
-    if (Number.isFinite(absolute) && absolute > now.getTime()) {
-      return new Date(Math.min(absolute, now.getTime() + MAX_RETRY_AFTER_MS));
-    }
+  const requestedMs = requestedRetryAfterMs(error, now);
+  if (requestedMs != null) {
+    return new Date(now.getTime() + requestedMs);
   }
   const exponent = Math.min(attempt - 1, 30);
   const delay = Math.min(baseMs * 2 ** exponent, capMs);
@@ -277,7 +386,9 @@ export function createAgentTriggerDeliveryEngine(
 
     const block = await deps.store.findEarlierUnsettled(delivery);
     if (block != null) {
-      const recheckAt = now().getTime() + ORDERING_RECHECK_MS;
+      const recheckAt =
+        now().getTime() +
+        (block.reason === 'active_handling' ? ACTIVE_HANDLING_RECHECK_MS : ORDERING_RECHECK_MS);
       const nextCheck =
         block.leaseUntil == null ? Math.max(recheckAt, block.availableAt.getTime()) : recheckAt;
       noteEligibleAt(new Date(nextCheck));
@@ -291,9 +402,25 @@ export function createAgentTriggerDeliveryEngine(
     }
 
     if (delivery.attempts >= maxAttempts) {
-      const recorded =
+      const recorded = normalizeFailure(
         delivery.lastError ??
-        failure(new Error('Delivery attempt limit was already exhausted'), now());
+          failure(new Error('Delivery attempt limit was already exhausted'), now()),
+      );
+      try {
+        await deps.settleSourceBeforeDeadLetter?.(delivery.envelope, recorded);
+      } catch (error) {
+        logger.error('[agent-triggers] source terminalization failed before dead-lettering', {
+          deliveryKey: delivery.deliveryKey,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        await deps.store.release({
+          id: delivery.id,
+          workerId,
+          claimToken: delivery.claimToken,
+          availableAt: now(),
+        });
+        return;
+      }
       const deadLettered = await deps.store.dead({
         id: delivery.id,
         workerId,
@@ -301,6 +428,9 @@ export function createAgentTriggerDeliveryEngine(
         attempt: delivery.attempts,
         error: recorded,
         settledAt: now(),
+        ...(recorded.retryable && {
+          receiptRetryAt: new Date(now().getTime() + retryCapMs),
+        }),
       });
       if (deadLettered) {
         logger.error('[agent-triggers] delivery dead-lettered after exhausting retries', {
@@ -350,7 +480,16 @@ export function createAgentTriggerDeliveryEngine(
     try {
       let result: AgentTriggerExecutionResult;
       try {
-        result = await deps.dispatch(delivery.envelope, { signal: controller.signal });
+        const members = await deps.store.getBatch(delivery);
+        const dispatchEnvelope =
+          members.length === 0
+            ? delivery.envelope
+            : createAgentTriggerBatchEnvelope(delivery, members);
+        result = await deps.dispatch(dispatchEnvelope, {
+          signal: controller.signal,
+          attempt,
+          maxAttempts,
+        });
       } catch (error) {
         const attemptedAt = now();
         const deletionCancelled = controller.signal.aborted && cancelledUsers.has(userId);
@@ -362,8 +501,12 @@ export function createAgentTriggerDeliveryEngine(
           deletionRejected ||
           runtimeNotReady
         ) {
-          const delayMs =
-            error instanceof AgentTriggerDeliveryDeferredError ? error.delayMs : DEFAULT_DEFER_MS;
+          let delayMs = DEFAULT_DEFER_MS;
+          if (error instanceof AgentTriggerDeliveryDeferredError) {
+            delayMs = error.delayMs;
+          } else if (runtimeNotReady) {
+            delayMs = readinessDeferMs(error, attemptedAt);
+          }
           const availableAt = new Date(attemptedAt.getTime() + delayMs);
           noteEligibleAt(availableAt);
           const deferred = await deps.store.defer({
@@ -388,8 +531,26 @@ export function createAgentTriggerDeliveryEngine(
           }
           return;
         }
-        const recorded = failure(error, attemptedAt);
+        const recorded = normalizeFailure(failure(error, attemptedAt));
         if (!recorded.retryable || attempt >= maxAttempts) {
+          try {
+            await deps.settleSourceBeforeDeadLetter?.(delivery.envelope, recorded);
+          } catch (settlementError) {
+            logger.error('[agent-triggers] source terminalization failed before dead-lettering', {
+              deliveryKey: delivery.deliveryKey,
+              error:
+                settlementError instanceof Error
+                  ? settlementError.message
+                  : String(settlementError),
+            });
+            await deps.store.release({
+              id: delivery.id,
+              workerId,
+              claimToken: delivery.claimToken,
+              availableAt: attemptedAt,
+            });
+            return;
+          }
           const deadLettered = await deps.store.dead({
             id: delivery.id,
             workerId,
@@ -397,6 +558,9 @@ export function createAgentTriggerDeliveryEngine(
             attempt,
             error: recorded,
             settledAt: attemptedAt,
+            ...(recorded.retryable && {
+              receiptRetryAt: new Date(attemptedAt.getTime() + retryCapMs),
+            }),
           });
           if (deadLettered) {
             logger.error('[agent-triggers] delivery dead-lettered', {
@@ -432,6 +596,7 @@ export function createAgentTriggerDeliveryEngine(
 
       const settledAt = now();
       try {
+        const handling = startedHandling(delivery, result, settledAt);
         await deps.store.complete({
           id: delivery.id,
           workerId,
@@ -439,6 +604,8 @@ export function createAgentTriggerDeliveryEngine(
           attempt,
           result,
           settledAt,
+          ...(delivery.awaitTerminalHandling === true && { awaitTerminalHandling: true }),
+          ...(handling != null && { handling }),
         });
       } catch (error) {
         const recorded: AgentTriggerDeliveryFailure = {
@@ -548,7 +715,12 @@ export function createAgentTriggerDeliveryEngine(
     if (activeClaim != null) {
       return activeClaim;
     }
-    activeClaim = runAsSystem(runClaimPass)
+    /** Claim passes are started from timers and from `wake()` calls made inside
+     * request handlers. Run them under the root context so a pass never joins
+     * whichever request happened to wake the engine — otherwise every later tick
+     * inherits that request's trace for the life of the timer chain. */
+    activeClaim = context
+      .with(ROOT_CONTEXT, () => runAsSystem(runClaimPass))
       .then((result) => {
         /** Only a pass that confirmed an empty queue may advance the idle backoff: work
          *  resets it, and a failed claim proves nothing, so it polls on at the base
@@ -628,19 +800,23 @@ export function createAgentTriggerDeliveryEngine(
     if (eligibleDeadlinesMs.length > 0) {
       delay = Math.max(0, Math.min(delay, eligibleDeadlinesMs[0] - now().getTime()));
     }
-    timer = setTimeout(async () => {
-      if (stopped) {
-        return;
-      }
-      const nowMs = now().getTime();
-      while (eligibleDeadlinesMs.length > 0 && eligibleDeadlinesMs[0] <= nowMs) {
-        eligibleDeadlinesMs.shift();
-      }
-      await claimAvailable().catch((error) =>
-        logger.error('[agent-triggers] delivery claim pass failed:', error),
-      );
-      schedule();
-    }, delay);
+    /** Created under the root context too: `schedule()` runs from `wake()` inside
+     * request handlers, and each tick reschedules from its own callback. */
+    timer = context.with(ROOT_CONTEXT, () =>
+      setTimeout(async () => {
+        if (stopped) {
+          return;
+        }
+        const nowMs = now().getTime();
+        while (eligibleDeadlinesMs.length > 0 && eligibleDeadlinesMs[0] <= nowMs) {
+          eligibleDeadlinesMs.shift();
+        }
+        await claimAvailable().catch((error) =>
+          logger.error('[agent-triggers] delivery claim pass failed:', error),
+        );
+        schedule();
+      }, delay),
+    );
     timer.unref();
   };
 

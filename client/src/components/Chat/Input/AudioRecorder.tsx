@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { AudioLines, Check, ChevronDown, createLucideIcon, MicOff } from 'lucide-react';
-import * as Ariakit from '@ariakit/react';
 import { useRecoilValue } from 'recoil';
+import * as Ariakit from '@ariakit/react';
+import { AudioLines, Check, ChevronDown, createLucideIcon, MicOff } from 'lucide-react';
 import {
   IconButton,
   DropdownPopup,
@@ -10,8 +10,8 @@ import {
   ListeningIcon,
   Spinner,
 } from '@librechat/client';
-import { useLocalize, useSpeechToText, useGetAudioSettings } from '~/hooks';
 import { globalAudioId, type TAskFunction, type MenuItemProps } from '~/common';
+import { useLocalize, useSpeechToText, useGetAudioSettings } from '~/hooks';
 import { useChatFormContext } from '~/Providers';
 import store from '~/store';
 
@@ -196,7 +196,12 @@ export default memo(function AudioRecorder({
         onClick: () => handleSelectBrowserAudioDevice(device.deviceId),
       };
     });
-  }, [browserCaptureDevices, selectedBrowserCaptureDeviceId, localize, handleSelectBrowserAudioDevice]);
+  }, [
+    browserCaptureDevices,
+    selectedBrowserCaptureDeviceId,
+    localize,
+    handleSelectBrowserAudioDevice,
+  ]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -272,7 +277,7 @@ export default memo(function AudioRecorder({
           trigger={
             <Ariakit.MenuButton
               id="browser-audio-devices"
-              type="button"
+              render={<button type="button" />}
               disabled={browserAudioMenuDisabled}
               aria-label={localize('com_ui_browser_audio_devices')}
               title={localize('com_ui_browser_audio_devices')}

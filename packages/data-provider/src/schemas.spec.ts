@@ -12,6 +12,7 @@ import {
   eReasoningModeSchema,
   eReasoningContextSchema,
   subagentThreadLineageSchema,
+  getGoogleThinkingBudgetBounds,
 } from './schemas';
 
 describe('anthropicSettings', () => {
@@ -519,6 +520,37 @@ describe('googleSettings', () => {
     });
   });
 
+  describe('getGoogleThinkingBudgetBounds()', () => {
+    it('returns the documented Pro floor and ceiling', () => {
+      expect(getGoogleThinkingBudgetBounds('gemini-2.5-pro')).toEqual({ min: 128, max: 32768 });
+      expect(getGoogleThinkingBudgetBounds('gemini-2.5-pro-preview-05-06')).toEqual({
+        min: 128,
+        max: 32768,
+      });
+    });
+
+    it('returns the documented Flash floor and ceiling', () => {
+      expect(getGoogleThinkingBudgetBounds('gemini-2.5-flash')).toEqual({ min: 0, max: 24576 });
+    });
+
+    it('returns the documented Flash Lite floor and ceiling', () => {
+      expect(getGoogleThinkingBudgetBounds('gemini-2.5-flash-lite')).toEqual({
+        min: 512,
+        max: 24576,
+      });
+      expect(getGoogleThinkingBudgetBounds('gemini-2.5-flash-lite-preview-09-2025')).toEqual({
+        min: 512,
+        max: 24576,
+      });
+    });
+
+    it('does not apply 2.5 bounds to other Gemini families', () => {
+      expect(getGoogleThinkingBudgetBounds('gemini-2.0-flash')).toBeUndefined();
+      expect(getGoogleThinkingBudgetBounds('gemini-3-pro')).toBeUndefined();
+      expect(getGoogleThinkingBudgetBounds('gemini-1.5-pro')).toBeUndefined();
+    });
+  });
+
   describe('compactGoogleSchema (model-aware maxOutputTokens)', () => {
     it('strips the model default for current Gemini models', () => {
       const result = compactGoogleSchema.parse({
@@ -648,6 +680,34 @@ describe('subagentThreadLineageSchema', () => {
     expect(() =>
       subagentThreadLineageSchema.parse({ ...lineage, parentConversationId: '' }),
     ).toThrow();
+  });
+});
+
+describe('tMessageSchema context fading', () => {
+  const message = {
+    messageId: 'message-1',
+    conversationId: 'conversation-1',
+    parentMessageId: null,
+    text: 'Assistant-role text',
+    isCreatedByUser: false,
+  };
+
+  it.each([1, 2])('round-trips stored version %i tiers', (v) => {
+    const fading = { v, budgetTokens: 10_000, masked: true };
+    const contextMeta = {
+      calibrationRatio: 1,
+      fading,
+      fadingTiers: [{ agentId: 'agent-a', ...fading }],
+    };
+    expect(tMessageSchema.parse({ ...message, contextMeta }).contextMeta).toEqual(contextMeta);
+  });
+
+  it('rejects unknown tier versions', () => {
+    const contextMeta = {
+      calibrationRatio: 1,
+      fading: { v: 3, budgetTokens: 10_000, masked: true },
+    };
+    expect(() => tMessageSchema.parse({ ...message, contextMeta })).toThrow();
   });
 });
 

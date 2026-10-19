@@ -10,9 +10,9 @@ const mockCompletionWakeupHandler = jest.fn().mockResolvedValue(undefined);
 jest.mock('@librechat/api', () => ({
   cacheConfig: { USE_REDIS: true, REDIS_KEY_PREFIX: 'test:' },
   ioredisClient: { duplicate: jest.fn() },
-  isEnabled: jest.fn(() => false),
   registerShutdownTask: jest.fn(),
   duplicateIoRedisClient: jest.fn(),
+  createIoRedisSubscriber: jest.fn(),
   createSubagentThreadTaskStore: jest.fn(() => mockTaskStore),
   createSubagentCompletionWakeupHandler: jest.fn(() => mockCompletionWakeupHandler),
   RedisSubagentTaskControlTransport: jest.fn(),
@@ -45,13 +45,14 @@ jest.mock('~/models', () => ({
 
 jest.mock('../../Agents/triggers', () => ({
   enqueueAgentTrigger: jest.fn(),
+  expediteCompletionWakeups: jest.fn(),
 }));
 
 const {
   ioredisClient,
-  isEnabled,
   registerShutdownTask,
   duplicateIoRedisClient,
+  createIoRedisSubscriber,
   createSubagentThreadTaskStore,
 } = require('@librechat/api');
 const subagentThreadTaskStore = require('./subagentThreadStore');
@@ -74,18 +75,20 @@ describe('subagent thread Redis lifecycle', () => {
     expect(taskStoreMethods.getSubagentTaskControlReplay).toBe(db.getSubagentTaskControlReplay);
   });
 
-  it('reads completion wakeup rollout state at task preparation time', async () => {
-    isEnabled.mockReturnValueOnce(false);
+  it('pre-registers completion wakeups for every prepared task', async () => {
+    await taskStoreOptions.onTaskPrepared({ taskId: 'task-1' });
 
-    await taskStoreOptions.onTaskPrepared({ taskId: 'disabled' });
-    expect(mockCompletionWakeupHandler).not.toHaveBeenCalled();
-    isEnabled.mockReturnValueOnce(true);
-    await taskStoreOptions.onTaskPrepared({ taskId: 'enabled' });
-    expect(mockCompletionWakeupHandler).toHaveBeenCalledWith({ taskId: 'enabled' });
-    isEnabled.mockReturnValueOnce(true);
-    expect(subagentThreadTaskStore.completionWakeupsEnabled).toBe(true);
-    isEnabled.mockReturnValueOnce(false);
-    expect(subagentThreadTaskStore.completionWakeupsEnabled).toBe(false);
+    expect(mockCompletionWakeupHandler).toHaveBeenCalledWith({ taskId: 'task-1' });
+  });
+
+  it('expedites only the settled task identities in their parent conversation', () => {
+    const { expediteCompletionWakeups } = require('../../Agents/triggers');
+    taskStoreOptions.onTaskSettled('user-1', 'parent-1', ['task-1', 'recovered-task']);
+    expect(expediteCompletionWakeups).toHaveBeenCalledWith({
+      user: 'user-1',
+      conversationId: 'parent-1',
+      taskIds: ['task-1', 'recovered-task'],
+    });
   });
 
   it('registers local task-store quiescence independently of optional Redis setup', () => {
@@ -101,7 +104,7 @@ describe('subagent thread Redis lifecycle', () => {
     const activitySubscriber = { disconnect: jest.fn() };
     const taskPublisher = { disconnect: jest.fn() };
     const activityPublisher = { disconnect: jest.fn() };
-    ioredisClient.duplicate
+    createIoRedisSubscriber
       .mockReturnValueOnce(taskSubscriber)
       .mockReturnValueOnce(activitySubscriber);
     duplicateIoRedisClient
@@ -110,6 +113,10 @@ describe('subagent thread Redis lifecycle', () => {
 
     await configureSubagentTaskRouting();
 
+    expect(createIoRedisSubscriber.mock.calls).toEqual([
+      [ioredisClient, '[SubagentTaskRouting] task subscriber'],
+      [ioredisClient, '[SubagentTaskRouting] activity subscriber'],
+    ]);
     expect(activityPrepareRegistration).toEqual([
       'subagent activity streams prepare',
       expect.any(Function),

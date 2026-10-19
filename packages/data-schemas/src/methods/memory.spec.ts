@@ -245,13 +245,40 @@ describe('memory partitions', () => {
 
     const personal = await methods.getFormattedMemories({ userId });
     expect(personal.totalTokens).toBe(5);
+    expect(personal.tokenCountsByKey).toEqual(new Map([['one', 5]]));
     expect(personal.withoutKeys).toContain('personal one');
     expect(personal.withoutKeys).not.toContain('agent two');
 
     const partitionA = await methods.getFormattedMemories({ userId, agentId });
     expect(partitionA.totalTokens).toBe(7);
+    expect(partitionA.tokenCountsByKey).toEqual(new Map([['two', 7]]));
     expect(partitionA.withKeys).toContain('"key": "two"');
     expect(partitionA.withKeys).not.toContain('personal one');
+  });
+
+  it('signals a read failure rather than reporting an empty memory partition', async () => {
+    const find = jest.spyOn(MemoryEntry, 'find').mockImplementationOnce(() => {
+      throw new Error('simulated memory read failure');
+    });
+    try {
+      const failed = await methods.getFormattedMemories({ userId });
+      expect(failed).toEqual({
+        withKeys: undefined,
+        withoutKeys: undefined,
+        totalTokens: 0,
+        tokenCountsByKey: new Map(),
+        readFailed: true,
+      });
+    } finally {
+      find.mockRestore();
+    }
+    const empty = await methods.getFormattedMemories({ userId });
+    expect(empty).toEqual({
+      withKeys: '',
+      withoutKeys: '',
+      totalTokens: 0,
+      tokenCountsByKey: new Map(),
+    });
   });
 
   it('returns every partition from getAllUserMemories and wipes them all on deleteAllUserMemories', async () => {
