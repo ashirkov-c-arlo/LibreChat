@@ -1,0 +1,100 @@
+diff --git a/client/src/hooks/Input/useSpeechToTextExternal.ts b/client/src/hooks/Input/useSpeechToTextExternal.ts
+index b2b33ca85..0c159959e 100644
+--- a/client/src/hooks/Input/useSpeechToTextExternal.ts
++++ b/client/src/hooks/Input/useSpeechToTextExternal.ts
+@@ -8,6 +8,7 @@ import store from '~/store';
+ type RecordingSource = 'microphone' | 'browser';
+ 
+ type BrowserCaptureDevice = { deviceId: string; label: string };
++type AudioInputDevice = Pick<MediaDeviceInfo, 'deviceId' | 'kind' | 'label'>;
+ 
+ const BROWSER_CAPTURE_PREFIX = 'librechat_';
+ const BROWSER_CAPTURE_DEVICE_KEY = 'librechatBrowserCaptureDeviceId';
+@@ -56,6 +57,17 @@ const normalizeDeviceLabel = (label: string) => label.toLowerCase().replace(/[^a
+ const matchesBrowserCaptureDevice = (label: string) =>
+   normalizeDeviceLabel(label).startsWith(BROWSER_CAPTURE_PREFIX);
+ 
++const isLibreChatCaptureDevice = (label: string) =>
++  normalizeDeviceLabel(label).includes(BROWSER_CAPTURE_PREFIX);
++
++export const findPhysicalMicrophone = (devices: AudioInputDevice[]) =>
++  devices.find(
++    (device) =>
++      device.kind === 'audioinput' &&
++      device.label !== '' &&
++      !isLibreChatCaptureDevice(device.label),
++  );
++
+ const isMissingDeviceError = (error: Error) =>
+   error.name === 'NotFoundError' || error.name === 'OverconstrainedError';
+ 
+@@ -163,6 +175,32 @@ const useSpeechToTextExternal = (
+       video: false,
+     });
+ 
++  const requestMicrophoneStream = (deviceId?: string) =>
++    navigator.mediaDevices.getUserMedia({
++      audio: deviceId ? { deviceId: { exact: deviceId } } : true,
++      video: false,
++    });
++
++  const getMicrophoneStream = async () => {
++    let microphone = findPhysicalMicrophone(await navigator.mediaDevices.enumerateDevices());
++    if (microphone) {
++      return requestMicrophoneStream(microphone.deviceId);
++    }
++
++    const stream = await requestMicrophoneStream();
++    const track = stream.getAudioTracks()[0];
++    if (!track?.label || !isLibreChatCaptureDevice(track.label)) {
++      return stream;
++    }
++
++    stream.getTracks().forEach((item) => item.stop());
++    microphone = findPhysicalMicrophone(await navigator.mediaDevices.enumerateDevices());
++    if (!microphone) {
++      throw new DOMException('Physical microphone not found', 'NotFoundError');
++    }
++    return requestMicrophoneStream(microphone.deviceId);
++  };
++
+   const saveBrowserCaptureDevice = (stream: MediaStream) => {
+     const deviceId = stream.getAudioTracks()[0]?.getSettings().deviceId;
+     if (deviceId) {
+@@ -214,7 +252,7 @@ const useSpeechToTextExternal = (
+     if (source === 'browser') {
+       return getBrowserCaptureStream();
+     }
+-    return navigator.mediaDevices.getUserMedia({ audio: true, video: false });
++    return getMicrophoneStream();
+   };
+ 
+   const handleCaptureError = (error: Error) => {
+diff --git a/client/src/hooks/Input/useSpeechToTextExternal.spec.ts b/client/src/hooks/Input/useSpeechToTextExternal.spec.ts
+new file mode 100644
+index 000000000..cb1b80275
+--- /dev/null
++++ b/client/src/hooks/Input/useSpeechToTextExternal.spec.ts
+@@ -0,0 +1,22 @@
++import { findPhysicalMicrophone } from './useSpeechToTextExternal';
++
++const audioInput = (
++  deviceId: string,
++  label: string,
++): Pick<MediaDeviceInfo, 'deviceId' | 'kind' | 'label'> => ({
++  deviceId,
++  kind: 'audioinput',
++  label,
++});
++
++describe('findPhysicalMicrophone', () => {
++  it('skips LibreChat capture sources', () => {
++    const microphone = findPhysicalMicrophone([
++      audioInput('browser', 'LibreChat Browser Capture'),
++      audioInput('zoom', 'LibreChat Zoom Capture'),
++      audioInput('microphone', 'Built-in Audio Analog Stereo'),
++    ]);
++
++    expect(microphone?.deviceId).toBe('microphone');
++  });
++});

@@ -9,6 +9,10 @@ const mockStartSpeechRecordingBrowser = jest.fn();
 const mockStopSpeechRecordingBrowser = jest.fn();
 const mockStartSpeechRecordingExternal = jest.fn();
 const mockStopSpeechRecordingExternal = jest.fn();
+const mockStartBrowserAudioRecording = jest.fn();
+const mockStopBrowserAudioRecording = jest.fn();
+const mockLoadBrowserCaptureDevices = jest.fn();
+const mockSelectBrowserCaptureDevice = jest.fn();
 
 jest.mock('./useGetAudioSettings', () => ({
   __esModule: true,
@@ -32,6 +36,14 @@ jest.mock('./useSpeechToTextExternal', () => ({
     isLoading: false,
     externalStartRecording: mockStartSpeechRecordingExternal,
     externalStopRecording: mockStopSpeechRecordingExternal,
+    isBrowserAudioListening: false,
+    isBrowserAudioLoading: false,
+    startBrowserAudioRecording: mockStartBrowserAudioRecording,
+    stopBrowserAudioRecording: mockStopBrowserAudioRecording,
+    browserCaptureDevices: [],
+    selectedBrowserCaptureDeviceId: null,
+    loadBrowserCaptureDevices: mockLoadBrowserCaptureDevices,
+    selectBrowserCaptureDevice: mockSelectBrowserCaptureDevice,
   }),
 }));
 
@@ -64,6 +76,15 @@ describe('useSpeechToText', () => {
 
     expect(mockStartSpeechRecordingBrowser).toHaveBeenCalledTimes(1);
     expect(mockStartSpeechRecordingExternal).not.toHaveBeenCalled();
+  });
+
+  it('always exposes the external Firefox audio recorder', () => {
+    mockSpeechToTextEndpoint = 'browser';
+    const { result } = renderHook(() => useSpeechToText(jest.fn(), jest.fn()));
+
+    act(() => void result.current.startBrowserAudioRecording());
+
+    expect(mockStartBrowserAudioRecording).toHaveBeenCalledTimes(1);
   });
 
   it('selects the active engine stop handler', () => {

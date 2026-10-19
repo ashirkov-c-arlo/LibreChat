@@ -1,0 +1,34 @@
+diff --git a/packages/data-provider/specs/effort.spec.ts b/packages/data-provider/specs/effort.spec.ts
+index 7f78ed2..20bf2b4 100644
+--- a/packages/data-provider/specs/effort.spec.ts
++++ b/packages/data-provider/specs/effort.spec.ts
+@@ -86,12 +86,12 @@ describe('resolveEffortConfig', () => {
+ 
+   describe('model switching', () => {
+     it('carries a supported value across effort families', () => {
+-      expect(
+-        resolveEffortConfig(byName('gpt-5.6-luna'), { effort: 'high' })?.selectedValue,
+-      ).toBe('high');
+-      expect(resolveEffortConfig(byName('glm-5'), { reasoning_effort: 'high' })?.selectedValue).toBe(
++      expect(resolveEffortConfig(byName('gpt-5.6-luna'), { effort: 'high' })?.selectedValue).toBe(
+         'high',
+       );
++      expect(
++        resolveEffortConfig(byName('glm-5'), { reasoning_effort: 'high' })?.selectedValue,
++      ).toBe('high');
+     });
+ 
+     it('falls back when the carried value is unsupported', () => {
+diff --git a/packages/data-provider/src/effort.ts b/packages/data-provider/src/effort.ts
+index 5f01a5d..9002aa1 100644
+--- a/packages/data-provider/src/effort.ts
++++ b/packages/data-provider/src/effort.ts
+@@ -101,7 +101,5 @@ export function findActiveModelSpec(
+     return undefined;
+   }
+ 
+-  return specs.find(
+-    (spec) => spec.preset?.endpoint === endpoint && spec.preset?.model === model,
+-  );
++  return specs.find((spec) => spec.preset?.endpoint === endpoint && spec.preset?.model === model);
+ }

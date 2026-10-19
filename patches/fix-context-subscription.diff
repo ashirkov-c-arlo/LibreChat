@@ -1,0 +1,52 @@
+diff --git a/client/src/components/Chat/Input/ChatForm.tsx b/client/src/components/Chat/Input/ChatForm.tsx
+index c365e9a..e1e4007 100644
+--- a/client/src/components/Chat/Input/ChatForm.tsx
++++ b/client/src/components/Chat/Input/ChatForm.tsx
+@@ -670,7 +670,7 @@ const ChatForm = memo(function ChatForm({
+                   }
+                 />
+                 <div className="mx-auto flex" />
+-                <ThinkingEffort conversation={conversation} isSubmitting={isSubmitting} />
++                <ThinkingEffort />
+                 <TokenUsage index={index} conversation={conversation} isSubmitting={isSubmitting} />
+                 {SpeechToText && (
+                   <AudioRecorder
+diff --git a/client/src/components/Chat/Input/ThinkingEffort.tsx b/client/src/components/Chat/Input/ThinkingEffort.tsx
+index 64656d9..e94d34d 100644
+--- a/client/src/components/Chat/Input/ThinkingEffort.tsx
++++ b/client/src/components/Chat/Input/ThinkingEffort.tsx
+@@ -3,17 +3,13 @@ import * as Ariakit from '@ariakit/react';
+ import { TooltipAnchor } from '@librechat/client';
+ import { Brain, Check, ChevronDown } from 'lucide-react';
+ import { findActiveModelSpec, resolveEffortConfig } from 'librechat-data-provider';
+-import type { EffortValue, TConversation } from 'librechat-data-provider';
++import type { EffortValue } from 'librechat-data-provider';
+ import type { TranslationKeys } from '~/hooks';
+ import { useSetIndexOptions, useLocalize } from '~/hooks';
+ import { useGetStartupConfig } from '~/data-provider';
++import { useChatContext } from '~/Providers';
+ import { cn } from '~/utils';
+ 
+-interface ThinkingEffortProps {
+-  conversation: TConversation | null;
+-  isSubmitting: boolean;
+-}
+-
+ /** Explicit map: dynamic key construction would defeat the typed key check. */
+ const effortLabelKeys: Record<EffortValue, TranslationKeys> = {
+   low: 'com_ui_thinking_effort_low',
+@@ -30,9 +26,13 @@ const MENU_CLASS =
+ const MENU_ITEM_CLASS =
+   'flex w-full cursor-pointer items-center justify-between gap-3 rounded-lg px-2 py-1.5 text-sm text-text-primary data-[active-item]:bg-surface-tertiary';
+ 
+-function ThinkingEffortSelector({ conversation, isSubmitting }: ThinkingEffortProps) {
++function ThinkingEffortSelector() {
+   const localize = useLocalize();
+   const { data: startupConfig } = useGetStartupConfig();
++  /** Read the conversation from context, not from a prop: ChatForm passes a
++   *  `stableConversation` memo whose dependency allowlist omits the effort
++   *  params, so a prop would stay frozen on the value selected here. */
++  const { conversation, isSubmitting } = useChatContext();
+   const { setOption } = useSetIndexOptions();
+   const menu = Ariakit.useMenuStore({ placement: 'top-start', focusLoop: true });
+ 

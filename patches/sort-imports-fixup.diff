@@ -1,0 +1,29 @@
+diff --git a/client/src/components/Chat/Input/ChatForm.tsx b/client/src/components/Chat/Input/ChatForm.tsx
+index 139281a..c365e9a 100644
+--- a/client/src/components/Chat/Input/ChatForm.tsx
++++ b/client/src/components/Chat/Input/ChatForm.tsx
+@@ -38,12 +38,12 @@ import FileFormChat from './Files/FileFormChat';
+ import InFlightSteers from './InFlightSteers';
+ import TextareaHeader from './TextareaHeader';
+ import PromptsCommand from './PromptsCommand';
++import ThinkingEffort from './ThinkingEffort';
+ import SkillsCommand from './SkillsCommand';
+ import AudioRecorder from './AudioRecorder';
+ import CollapseChat from './CollapseChat';
+ import QuoteButton from './QuoteButton';
+ import StreamAudio from './StreamAudio';
+-import ThinkingEffort from './ThinkingEffort';
+ import TokenUsage from './TokenUsage';
+ import StopButton from './StopButton';
+ import SendButton from './SendButton';
+diff --git a/packages/data-provider/src/effort.ts b/packages/data-provider/src/effort.ts
+index 5f01a5d..8d09d38 100644
+--- a/packages/data-provider/src/effort.ts
++++ b/packages/data-provider/src/effort.ts
+@@ -1,5 +1,5 @@
+-import { effortValues } from './models';
+ import type { EffortField, EffortValue, EffortSelectorConfig, TModelSpec } from './models';
++import { effortValues } from './models';
+ 
+ export type ResolvedEffortConfig = {
+   field: EffortField;
