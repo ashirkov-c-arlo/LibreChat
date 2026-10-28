@@ -561,6 +561,54 @@ describe('loadAgent', () => {
     expect(withoutFlag?.tools).not.toContain('ask_user_question');
   });
 
+  test('should equip ask_user_question from the custom endpoint chatDefaults when no spec is active', async () => {
+    const { EPHEMERAL_AGENT_ID } = Constants;
+    const load = (endpoint: string, spec?: string) =>
+      loadAgent(
+        {
+          req: {
+            user: { id: 'user123' },
+            body: {},
+            config: {
+              config: {},
+              fileStrategy: FileSources.local,
+              imageOutputType: 'png',
+              endpoints: {
+                custom: [
+                  {
+                    name: 'LiteLLM',
+                    apiKey: 'key',
+                    baseURL: 'http://litellm/v1',
+                    models: { default: ['Sonnet 5.5'] },
+                    chatDefaults: { askUserQuestion: true },
+                  },
+                ],
+              },
+              modelSpecs: {
+                list: [
+                  {
+                    name: 'pinned',
+                    label: 'Pinned',
+                    preset: { endpoint: 'LiteLLM', model: 'Sonnet 5.5' },
+                  },
+                ],
+              },
+            } as unknown as AppConfig,
+          },
+          spec,
+          agent_id: EPHEMERAL_AGENT_ID as string,
+          endpoint,
+          model_parameters: { model: 'Sonnet 5.5' } as unknown as AgentModelParameters,
+        },
+        deps,
+      );
+
+    expect((await load('LiteLLM'))?.tools).toContain('ask_user_question');
+    /** An active spec decides on its own; other endpoints are unaffected */
+    expect((await load('LiteLLM', 'pinned'))?.tools).not.toContain('ask_user_question');
+    expect((await load('Other'))?.tools).not.toContain('ask_user_question');
+  });
+
   test('synthesizes background tool_options for eligible MCP tools from the ephemeralAgent flag', async () => {
     const { EPHEMERAL_AGENT_ID } = Constants;
     mockGetMCPServerTools.mockResolvedValue({ crm_lookup: { name: 'crm_lookup' } });

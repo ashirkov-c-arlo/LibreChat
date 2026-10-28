@@ -872,6 +872,7 @@ const ChatForm = memo(function ChatForm({
                   isSubmitting={isSubmitting}
                   conversationId={conversationId}
                   specName={conversation?.spec}
+                  endpoint={endpoint}
                   onChange={setBadges}
                   isInChat={
                     Array.isArray(conversation?.messages) && conversation.messages.length >= 1

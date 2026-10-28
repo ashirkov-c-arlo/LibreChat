@@ -177,7 +177,7 @@ export function materializeModelSpecEndpoints<
   return { ...modelSpecs, list: materialized } as T;
 }
 
-export const effortValues = ['low', 'medium', 'high', 'max', 'xhigh'] as const;
+export const effortValues = ['none', 'minimal', 'low', 'medium', 'high', 'max', 'xhigh'] as const;
 export type EffortValue = (typeof effortValues)[number];
 
 export const effortFields = ['effort', 'reasoning_effort'] as const;

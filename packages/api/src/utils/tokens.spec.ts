@@ -98,6 +98,13 @@ describe('getModelMaxOutputTokens partial-override fallback', () => {
     expect(fallback).toBe(builtin);
     expect(fallback).toBeGreaterThan(0);
   });
+
+  it('reads the output limit, not the context, for an exactly listed model', () => {
+    expect(getModelMaxOutputTokens('custom-model', EModelEndpoint.custom, partialOverride)).toBe(
+      4096,
+    );
+    expect(getModelMaxTokens('custom-model', EModelEndpoint.custom, partialOverride)).toBe(32000);
+  });
 });
 
 describe('gpt-5.6 tiers', () => {

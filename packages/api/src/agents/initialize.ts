@@ -1341,13 +1341,19 @@ export async function initializeAgent(
     llmConfig?.maxTokens as number | undefined,
     0,
   );
+  /** Gateway metadata is the sole source for its models: one it does not describe
+   *  gets the default, not a guess from its arbitrary public name. */
+  const modelMaxTokens =
+    customEndpointConfig?.models?.metadata != null
+      ? options.endpointTokenConfig?.[tokensModel ?? '']?.context
+      : getModelMaxTokens(
+          tokensModel ?? '',
+          providerEndpointMap[overrideProvider as keyof typeof providerEndpointMap],
+          options.endpointTokenConfig,
+        );
   const agentMaxContextTokens = optionalChainWithEmptyCheck(
     maxContextTokens,
-    getModelMaxTokens(
-      tokensModel ?? '',
-      providerEndpointMap[overrideProvider as keyof typeof providerEndpointMap],
-      options.endpointTokenConfig,
-    ),
+    modelMaxTokens,
     DEFAULT_MAX_CONTEXT_TOKENS,
   );
 

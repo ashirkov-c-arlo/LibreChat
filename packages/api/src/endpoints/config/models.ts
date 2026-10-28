@@ -190,6 +190,7 @@ export function createLoadConfigModels(deps: LoadConfigModelsDeps) {
             headers: endpointHeaders,
             direct: endpoint.directEndpoint,
             userIdQuery: models.userIdQuery,
+            metadata: models.metadata,
             tokenKey,
           });
         }
@@ -233,6 +234,7 @@ export function createLoadConfigModels(deps: LoadConfigModelsDeps) {
                 headers: baseURLIsUserProvided ? undefined : endpointHeaders,
                 direct: endpoint.directEndpoint,
                 userIdQuery: models.userIdQuery,
+                metadata: models.metadata,
                 skipCache: true,
                 /** Fetched with the user's key/URL — always user-scoped */
                 tokenKey: getTokenConfigKey(endpoint, name, req.user?.id ?? '', tenantId),

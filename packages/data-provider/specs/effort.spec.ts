@@ -1,5 +1,10 @@
-import { findActiveModelSpec, resolveEffortConfig } from '../src/effort';
+import {
+  findActiveModelSpec,
+  resolveEffortConfig,
+  resolveMetadataEffortConfig,
+} from '../src/effort';
 import { specsConfigSchema } from '../src/models';
+import { endpointSchema } from '../src/config';
 import type { EffortField, EffortValue, TModelSpec } from '../src/models';
 
 const CLAUDE_OPTIONS: EffortValue[] = ['low', 'medium', 'high', 'max'];
@@ -211,6 +216,68 @@ describe('effortSelector config validation', () => {
         effortSelector: { field: 'thinkingEffort', options: ['low'] },
         preset: { endpoint: 'bedrock', model: 'm' },
       }).success,
+    ).toBe(false);
+  });
+});
+
+describe('resolveMetadataEffortConfig', () => {
+  const LITELLM = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+
+  it('offers every level the gateway reports, in its order, on reasoning_effort', () => {
+    const resolved = resolveMetadataEffortConfig(LITELLM, 'medium', {});
+    expect(resolved).toEqual({
+      field: 'reasoning_effort',
+      options: LITELLM,
+      defaultValue: 'medium',
+      selectedValue: 'medium',
+    });
+  });
+
+  it('renders nothing when the gateway reports no levels', () => {
+    expect(resolveMetadataEffortConfig(undefined, 'medium', {})).toBeNull();
+    expect(resolveMetadataEffortConfig(null, 'medium', {})).toBeNull();
+    expect(resolveMetadataEffortConfig(['turbo'], 'medium', {})).toBeNull();
+  });
+
+  it('keeps a stored offered value and replaces one the model does not offer', () => {
+    expect(
+      resolveMetadataEffortConfig(['low', 'high'], 'low', { reasoning_effort: 'high' })
+        ?.selectedValue,
+    ).toBe('high');
+    expect(
+      resolveMetadataEffortConfig(['low', 'high'], 'low', { reasoning_effort: 'max' })
+        ?.selectedValue,
+    ).toBe('low');
+  });
+
+  it('selects nothing, rather than the weakest level, when the default is not offered', () => {
+    const resolved = resolveMetadataEffortConfig(['none', 'low', 'high'], 'medium', {});
+    expect(resolved?.defaultValue).toBeUndefined();
+    expect(resolved?.selectedValue).toBeUndefined();
+  });
+});
+
+describe('custom endpoint chatDefaults and models.metadata', () => {
+  const base = { name: 'LiteLLM', apiKey: 'k', baseURL: 'http://x/v1' };
+
+  it('accepts the LiteLLM integration settings', () => {
+    const parsed = endpointSchema.parse({
+      ...base,
+      models: { default: ['Sonnet 5.5'], fetch: true, metadata: 'litellm' },
+      chatDefaults: { webSearch: true, askUserQuestion: true, reasoningEffort: 'medium' },
+    });
+    expect(parsed.models.metadata).toBe('litellm');
+    expect(parsed.chatDefaults?.reasoningEffort).toBe('medium');
+  });
+
+  it('rejects an unknown metadata source or effort', () => {
+    const models = { default: ['m'] };
+    expect(
+      endpointSchema.safeParse({ ...base, models: { ...models, metadata: 'x' } }).success,
+    ).toBe(false);
+    expect(
+      endpointSchema.safeParse({ ...base, models, chatDefaults: { reasoningEffort: 'turbo' } })
+        .success,
     ).toBe(false);
   });
 });

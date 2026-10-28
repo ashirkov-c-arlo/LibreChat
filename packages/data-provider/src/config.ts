@@ -39,7 +39,7 @@ import {
 } from './code/workspace';
 import { ComponentTypes, SettingTypes, OptionTypes } from './generate';
 import { STATEFUL_CODE_ENVIRONMENTS } from './stateful-code';
-import { specsConfigSchema, TSpecsConfig } from './models';
+import { specsConfigSchema, TSpecsConfig, effortValues } from './models';
 import { fileConfigSchema } from './file-config';
 import { isActionTool } from './types/tools';
 import { apiBaseUrl } from './api-endpoints';
@@ -1724,6 +1724,21 @@ export const paramDefinitionSchema = z.object({
   selectPlaceholderCode: z.boolean().optional(),
 });
 
+/**
+ * Chat defaults for a custom endpoint whose models have no modelSpec. Tool flags preset
+ * the composer toggles (`askUserQuestion`, which has no toggle, is equipped server-side);
+ * `reasoningEffort` is the effort selected when the model's metadata offers it.
+ */
+export const chatDefaultsSchema = z.object({
+  webSearch: z.boolean().optional(),
+  executeCode: z.boolean().optional(),
+  memory: z.boolean().optional(),
+  askUserQuestion: z.boolean().optional(),
+  reasoningEffort: z.enum(effortValues).optional(),
+});
+
+export type TChatDefaults = z.infer<typeof chatDefaultsSchema>;
+
 export const endpointSchema = baseEndpointSchema.merge(
   z.object({
     name: z.string().refine((value) => !eModelEndpointSchema.safeParse(value).success, {
@@ -1748,6 +1763,9 @@ export const endpointSchema = baseEndpointSchema.merge(
       default: z.array(modelItemSchema).min(1),
       fetch: z.boolean().optional(),
       userIdQuery: z.boolean().optional(),
+      /** Also read per-model limits, prices and reasoning efforts from the gateway's
+       *  model catalog (`litellm`: `GET /model_group/info`). Omit for list-only fetches. */
+      metadata: z.literal('litellm').optional(),
     }),
     iconURL: z.string().optional(),
     modelDisplayLabel: z.string().optional(),
@@ -1776,6 +1794,8 @@ export const endpointSchema = baseEndpointSchema.merge(
       .strict()
       .optional(),
     directEndpoint: z.boolean().optional(),
+    /** Endpoint-wide chat defaults for models that have no modelSpec. */
+    chatDefaults: chatDefaultsSchema.optional(),
     titleMessageRole: z.enum(['system', 'user', 'assistant']).optional(),
     /** Static per-model token config: context window and per-million-token rates */
     tokenConfig: z

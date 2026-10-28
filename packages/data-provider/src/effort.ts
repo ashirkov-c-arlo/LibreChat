@@ -4,8 +4,10 @@ import { effortValues } from './models';
 export type ResolvedEffortConfig = {
   field: EffortField;
   options: EffortValue[];
-  defaultValue: EffortValue;
-  selectedValue: EffortValue;
+  /** Absent only for metadata-driven models whose configured default is not offered:
+   *  nothing is sent and the gateway's own default applies. */
+  defaultValue?: EffortValue;
+  selectedValue?: EffortValue;
 };
 
 /** The sibling param a spec of the opposite family writes to. Used only to
@@ -63,6 +65,35 @@ export function resolveEffortConfig(
     ? presetDefault
     : (options[0] as EffortValue);
 
+  return selectEffort(field, options, defaultValue, params);
+}
+
+/**
+ * Resolves the effort control for a model without a spec, from the efforts its
+ * endpoint's metadata reports. Unknown levels are dropped; no efforts means no
+ * control. The default applies only when offered — never the first option, which
+ * would silently pick the weakest level.
+ */
+export function resolveMetadataEffortConfig(
+  efforts?: readonly string[] | null,
+  defaultEffort?: string | null,
+  params?: EffortParams | null,
+): ResolvedEffortConfig | null {
+  const options = (efforts ?? []).filter(isEffortValue);
+  if (options.length === 0) {
+    return null;
+  }
+  const defaultValue =
+    isEffortValue(defaultEffort) && options.includes(defaultEffort) ? defaultEffort : undefined;
+  return selectEffort('reasoning_effort', options, defaultValue, params);
+}
+
+function selectEffort(
+  field: EffortField,
+  options: EffortValue[],
+  defaultValue: EffortValue | undefined,
+  params?: EffortParams | null,
+): ResolvedEffortConfig {
   const current = params?.[field];
   if (isEffortValue(current) && options.includes(current)) {
     return { field, options, defaultValue, selectedValue: current };

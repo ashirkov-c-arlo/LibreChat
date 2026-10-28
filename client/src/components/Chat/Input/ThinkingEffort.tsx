@@ -2,16 +2,25 @@ import { memo, useEffect, useMemo } from 'react';
 import * as Ariakit from '@ariakit/react';
 import { TooltipAnchor } from '@librechat/client';
 import { Brain, Check, ChevronDown } from 'lucide-react';
-import { findActiveModelSpec, resolveEffortConfig } from 'librechat-data-provider';
+import {
+  isAgentsEndpoint,
+  findActiveModelSpec,
+  resolveEffortConfig,
+  isAssistantsEndpoint,
+  resolveModelCatalogKey,
+  resolveMetadataEffortConfig,
+} from 'librechat-data-provider';
 import type { EffortValue } from 'librechat-data-provider';
 import type { TranslationKeys } from '~/hooks';
+import { useGetStartupConfig, useGetEndpointsQuery, useTokenConfigQuery } from '~/data-provider';
 import { useSetIndexOptions, useLocalize } from '~/hooks';
-import { useGetStartupConfig } from '~/data-provider';
 import { useChatContext } from '~/Providers';
 import { cn } from '~/utils';
 
 /** Explicit map: dynamic key construction would defeat the typed key check. */
 const effortLabelKeys: Record<EffortValue, TranslationKeys> = {
+  none: 'com_ui_thinking_effort_none',
+  minimal: 'com_ui_thinking_effort_minimal',
   low: 'com_ui_thinking_effort_low',
   medium: 'com_ui_thinking_effort_medium',
   high: 'com_ui_thinking_effort_high',
@@ -29,6 +38,8 @@ const MENU_ITEM_CLASS =
 function ThinkingEffortSelector() {
   const localize = useLocalize();
   const { data: startupConfig } = useGetStartupConfig();
+  const { data: endpointsConfig } = useGetEndpointsQuery();
+  const { data: tokenConfig } = useTokenConfigQuery();
   /** Read the conversation from context, not from a prop: ChatForm passes a
    *  `stableConversation` memo whose dependency allowlist omits the effort
    *  params, so a prop would stay frozen on the value selected here. */
@@ -40,10 +51,23 @@ function ThinkingEffortSelector() {
     () => findActiveModelSpec(startupConfig?.modelSpecs?.list, conversation),
     [startupConfig?.modelSpecs?.list, conversation],
   );
-  const resolved = useMemo(
-    () => resolveEffortConfig(modelSpec, conversation),
-    [modelSpec, conversation],
-  );
+  /** A spec decides when active; otherwise the efforts the endpoint's metadata
+   *  reports for this model (agents carry their own params, so they are skipped). */
+  const resolved = useMemo(() => {
+    if (modelSpec) {
+      return resolveEffortConfig(modelSpec, conversation);
+    }
+    const endpoint = conversation?.endpoint;
+    if (endpoint == null || isAgentsEndpoint(endpoint) || isAssistantsEndpoint(endpoint)) {
+      return null;
+    }
+    const catalogKey = resolveModelCatalogKey(endpoint, tokenConfig);
+    return resolveMetadataEffortConfig(
+      tokenConfig?.[catalogKey]?.[conversation?.model ?? '']?.reasoningEfforts,
+      endpointsConfig?.[endpoint]?.chatDefaults?.reasoningEffort,
+      conversation,
+    );
+  }, [modelSpec, conversation, tokenConfig, endpointsConfig]);
 
   const field = resolved?.field;
   const selectedValue = resolved?.selectedValue;
@@ -64,7 +88,11 @@ function ThinkingEffortSelector() {
     return null;
   }
 
-  const label = localize(effortLabelKeys[resolved.selectedValue]);
+  const label = localize(
+    resolved.selectedValue == null
+      ? 'com_ui_thinking_effort_default'
+      : effortLabelKeys[resolved.selectedValue],
+  );
   const controlLabel = localize('com_ui_thinking_effort');
 
   return (

@@ -2,6 +2,7 @@ import { EModelEndpoint } from 'librechat-data-provider';
 import type { TModelsConfig, TTokenConfigMap, TModelTokenomics } from 'librechat-data-provider';
 import type { TxMethods } from '@librechat/data-schemas';
 import type { EndpointTokenConfig } from '~/types';
+import { getReasoningEfforts } from '~/endpoints/litellm';
 import { getModelMaxTokens, maxTokensMap } from '~/utils';
 
 export interface TokenomicsDeps {
@@ -17,6 +18,9 @@ export interface TokenConfigParams {
   endpointTokenConfigs?: Record<string, EndpointTokenConfig | undefined>;
   /** Include USD-per-1M rates; gated by `interface.contextCost` */
   includePricing?: boolean;
+  /** Endpoints whose override comes from gateway metadata: exact model match only,
+   *  no fallback to name patterns in the built-in map */
+  metadataEndpoints?: ReadonlySet<string>;
 }
 
 /**
@@ -27,7 +31,7 @@ export function buildTokenConfigMap(
   params: TokenConfigParams,
   deps: TokenomicsDeps,
 ): TTokenConfigMap {
-  const { modelsConfig, endpointTokenConfigs, includePricing = false } = params;
+  const { modelsConfig, endpointTokenConfigs, includePricing = false, metadataEndpoints } = params;
   const map: TTokenConfigMap = {};
 
   for (const [endpoint, models] of Object.entries(modelsConfig)) {
@@ -44,9 +48,15 @@ export function buildTokenConfigMap(
       const tokenomics: TModelTokenomics = {};
       /** getModelMaxTokens falls back to the built-in map for models absent
        *  from a partial override, so a single call covers both cases. */
-      const context = getModelMaxTokens(model, endpointKey, override);
+      const context = metadataEndpoints?.has(endpoint)
+        ? override?.[model]?.context
+        : getModelMaxTokens(model, endpointKey, override);
       if (context != null) {
         tokenomics.context = context;
+      }
+      const reasoningEfforts = getReasoningEfforts(override?.[model]);
+      if (reasoningEfforts) {
+        tokenomics.reasoningEfforts = reasoningEfforts;
       }
 
       if (includePricing) {

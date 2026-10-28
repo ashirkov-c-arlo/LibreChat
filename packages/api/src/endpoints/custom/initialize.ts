@@ -256,6 +256,9 @@ export async function initializeCustom(
   const cache = tokenConfigCache();
   const hasTokenConfig = endpointConfig.tokenConfig != null;
   const tokenKey = getTokenConfigKey(endpointConfig, endpoint, userId, tenantId);
+  const fetchesTokenConfig =
+    endpointConfig.models?.metadata != null ||
+    FetchTokenConfig[endpoint.toLowerCase() as keyof typeof FetchTokenConfig] != null;
 
   if (hasTokenConfig) {
     /** A static override is authoritative — use it for the agent's billing
@@ -266,18 +269,11 @@ export async function initializeCustom(
       endpointConfig.tokenConfig as Record<string, Record<string, number>>,
     );
   } else {
-    const cachedConfig =
-      FetchTokenConfig[endpoint.toLowerCase() as keyof typeof FetchTokenConfig] &&
-      (await cache.get(tokenKey));
+    const cachedConfig = fetchesTokenConfig && (await cache.get(tokenKey));
     endpointTokenConfig = (cachedConfig as EndpointTokenConfig) || undefined;
   }
 
-  if (
-    FetchTokenConfig[endpoint.toLowerCase() as keyof typeof FetchTokenConfig] &&
-    endpointConfig &&
-    endpointConfig.models?.fetch &&
-    !endpointTokenConfig
-  ) {
+  if (fetchesTokenConfig && endpointConfig.models?.fetch && !endpointTokenConfig) {
     await fetchModels({
       apiKey,
       baseURL,
@@ -287,6 +283,7 @@ export async function initializeCustom(
       user: userId,
       tokenKey,
       userObject: user,
+      metadata: endpointConfig.models?.metadata,
       // Mirror the security guard in `loadConfigModels`: never forward
       // header overrides when the base URL is user-supplied — configured
       // templates like {{LIBRECHAT_OPENID_ID_TOKEN}} would otherwise resolve

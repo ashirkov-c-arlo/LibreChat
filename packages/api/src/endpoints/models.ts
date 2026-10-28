@@ -8,8 +8,10 @@ import {
   EModelEndpoint,
   defaultModels,
 } from 'librechat-data-provider';
+import type { TEndpoint } from 'librechat-data-provider';
 import type { IUser } from '@librechat/data-schemas';
 import type { AxiosRequestConfig } from 'axios';
+import type { EndpointTokenConfig } from '~/types';
 import {
   processModelData,
   extractBaseURL,
@@ -20,6 +22,7 @@ import {
   inputSchema,
   applyAxiosProxyConfig,
 } from '~/utils';
+import { getLiteLLMModelGroupInfoURL, processLiteLLMModelGroups } from '~/endpoints/litellm';
 import { getModelCacheTokenConfigKey, isScopedTokenConfigKey } from '~/endpoints/keys';
 import { createSSRFSafeAgents, validateEndpointURL } from '~/auth';
 import { standardCache, tokenConfigCache } from '~/cache';
@@ -55,6 +58,8 @@ export interface FetchModelsParams {
   userObject?: Partial<IUser>;
   /** Skip MODEL_QUERIES cache (e.g., for user-provided keys) */
   skipCache?: boolean;
+  /** Gateway catalog to read per-model metadata from (`models.metadata`) */
+  metadata?: TEndpoint['models']['metadata'];
 }
 
 function applyUserProvidedBaseURLProtection(
@@ -166,6 +171,7 @@ export async function fetchModels({
   headers,
   userObject,
   skipCache = false,
+  metadata,
 }: FetchModelsParams): Promise<string[]> {
   let models: string[] = [];
   const baseURL = direct ? extractBaseURL(_baseURL ?? '') : _baseURL;
@@ -285,13 +291,23 @@ export async function fetchModels({
     }
     applyAxiosProxyConfig(options, url);
     applyUserProvidedBaseURLProtection(options, ssrfAgents);
+    /** Independent of the list request, so it runs alongside it; never rejects */
+    const metadataRequest =
+      createTokenConfig && metadata === 'litellm'
+        ? fetchLiteLLMTokenConfig(baseURL ?? '', options, name)
+        : undefined;
     const res = await axios.get(url.toString(), options);
 
     const input = res.data;
 
     const validationResult = inputSchema.safeParse(input);
-    if (validationResult.success && createTokenConfig) {
-      const endpointTokenConfig = processModelData(input);
+    let endpointTokenConfig: EndpointTokenConfig | undefined;
+    if (metadataRequest) {
+      endpointTokenConfig = await metadataRequest;
+    } else if (validationResult.success && createTokenConfig) {
+      endpointTokenConfig = processModelData(input);
+    }
+    if (endpointTokenConfig) {
       const cache = tokenConfigCache();
       await cache.set(tokenKey ?? name, endpointTokenConfig);
       if (modelsCache && cacheKey) {
@@ -309,6 +325,28 @@ export async function fetchModels({
   }
 
   return models;
+}
+
+/**
+ * Reads LiteLLM's model catalog with the same auth, proxy and SSRF options as the
+ * list request. A failure only loses metadata — the model list stays usable and the
+ * caller falls back to defaults — so it is logged rather than thrown.
+ */
+async function fetchLiteLLMTokenConfig(
+  baseURL: string,
+  options: AxiosRequestConfig,
+  name: string,
+): Promise<EndpointTokenConfig | undefined> {
+  try {
+    const res = await axios.get(getLiteLLMModelGroupInfoURL(baseURL), options);
+    return processLiteLLMModelGroups(res.data);
+  } catch (error) {
+    logAxiosError({
+      message: `Failed to fetch LiteLLM model metadata for ${name}`,
+      error: error as Error,
+    });
+    return undefined;
+  }
 }
 
 function modelsCacheKey(baseURL: string, apiKey: string): string {

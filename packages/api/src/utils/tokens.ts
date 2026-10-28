@@ -686,8 +686,8 @@ export function getModelTokenValue(
     return value;
   }
 
-  if (value?.context) {
-    return value.context;
+  if (value?.[key]) {
+    return value[key];
   }
 
   const matchedPattern = findMatchingPattern(modelName, tokensMap);

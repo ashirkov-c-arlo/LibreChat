@@ -3072,5 +3072,8 @@
   "com_ui_thinking_effort_medium": "Medium",
   "com_ui_thinking_effort_high": "High",
   "com_ui_thinking_effort_max": "Max",
-  "com_ui_thinking_effort_xhigh": "XHigh"
+  "com_ui_thinking_effort_xhigh": "XHigh",
+  "com_ui_thinking_effort_none": "None",
+  "com_ui_thinking_effort_minimal": "Minimal",
+  "com_ui_thinking_effort_default": "Default"
 }

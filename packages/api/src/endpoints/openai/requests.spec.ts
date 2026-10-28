@@ -225,3 +225,94 @@ describe('Azure full-hostname instances', () => {
     );
   });
 });
+
+describe('LiteLLM custom endpoint requests', () => {
+  const sse = (chunks: object[]) =>
+    new Response(
+      chunks.map((c) => `data: ${JSON.stringify(c)}\n\n`).join('') + 'data: [DONE]\n\n',
+      { headers: { 'content-type': 'text/event-stream' } },
+    );
+  const chunk = (delta: object, finish_reason: string | null = null) => ({
+    id: 'chatcmpl-test',
+    object: 'chat.completion.chunk',
+    created: 0,
+    model: 'any',
+    choices: [{ index: 0, delta, finish_reason }],
+  });
+
+  it.each([
+    { model: 'GPT 6 Luna', effort: ReasoningEffort.xhigh },
+    { model: 'Sonnet 5.5', effort: ReasoningEffort.max },
+    { model: 'Sonnet 5.5', effort: ReasoningEffort.none },
+  ])(
+    'streams a tool call for $model on Chat Completions with effort $effort',
+    async ({ model, effort }) => {
+      const bodies: Record<string, unknown>[] = [];
+      const urls: string[] = [];
+      const fetch: NonNullable<NonNullable<OpenAIConfiguration>['fetch']> = async (url, init) => {
+        urls.push(String(url));
+        bodies.push(JSON.parse(String(init?.body)));
+        return sse([
+          chunk({
+            role: 'assistant',
+            tool_calls: [
+              {
+                index: 0,
+                id: 'call_1',
+                type: 'function',
+                function: { name: 'get_time', arguments: '' },
+              },
+            ],
+          }),
+          chunk({ tool_calls: [{ index: 0, function: { arguments: '{"city":"Berlin"}' } }] }),
+          chunk({}, 'tool_calls'),
+        ]);
+      };
+      const { llmConfig, configOptions } = getOpenAIConfig(
+        'sk-litellm',
+        {
+          streaming: true,
+          reverseProxyUrl: 'http://litellm.lan:4000/v1',
+          modelOptions: { model, reasoning_effort: effort },
+        },
+        'LiteLLM',
+      );
+      expect(llmConfig.useResponsesApi).toBeUndefined();
+      const chatModel = initializeModel({
+        provider: Providers.OPENAI,
+        clientOptions: {
+          ...llmConfig,
+          verbosity: undefined,
+          configuration: { ...configOptions, fetch },
+        },
+        tools: [
+          {
+            type: 'function',
+            function: {
+              name: 'get_time',
+              description: 'Current time in a city',
+              parameters: {
+                type: 'object',
+                properties: { city: { type: 'string' } },
+                required: ['city'],
+              },
+            },
+          },
+        ],
+      });
+
+      const result = await chatModel.invoke('Call get_time for Berlin.');
+
+      expect(result.tool_calls).toEqual([
+        expect.objectContaining({ name: 'get_time', args: { city: 'Berlin' } }),
+      ]);
+      expect(urls).toEqual(['http://litellm.lan:4000/v1/chat/completions']);
+      expect(bodies[0]).toMatchObject({
+        model,
+        stream: true,
+        reasoning_effort: effort,
+        tools: [expect.objectContaining({ type: 'function' })],
+      });
+    },
+  );
+});

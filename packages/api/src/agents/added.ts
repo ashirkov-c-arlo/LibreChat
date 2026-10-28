@@ -17,10 +17,10 @@ import {
   validateMCPServerConfig,
 } from '~/mcp/utils';
 import { ASK_USER_QUESTION_TOOL_NAME } from '~/agents/hitl/askUserQuestionTool';
+import { getCustomEndpointConfig, chatDefaultsAskUser } from '~/app/config';
 import { synthesizeBackgroundToolOptions } from '~/agents/background';
 import { mergeSynthesizedToolOptions } from '~/agents/selection';
 import { synthesizeIntentToolOptions } from '~/agents/intent';
-import { getCustomEndpointConfig } from '~/app/config';
 
 const { mcp_all, mcp_delimiter } = Constants;
 
@@ -233,7 +233,11 @@ export async function loadAddedAgent(
   /** Mirror the primary ephemeral loader (`loadEphemeralAgent`) so a model
    *  spec's Ask User flag equips the added top-level agent too; downstream
    *  `createRun` gating (hitlCapable, non-subagent, admin filter) is uniform. */
-  if (ephemeralAgent?.ask_user_question === true || modelSpec?.askUserQuestion === true) {
+  if (
+    ephemeralAgent?.ask_user_question === true ||
+    modelSpec?.askUserQuestion === true ||
+    chatDefaultsAskUser({ endpoint, appConfig, modelSpec })
+  ) {
     tools.push(ASK_USER_QUESTION_TOOL_NAME);
   }
 

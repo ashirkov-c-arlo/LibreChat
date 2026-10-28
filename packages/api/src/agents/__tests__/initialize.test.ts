@@ -49,7 +49,7 @@ import {
   configSchema,
 } from 'librechat-data-provider';
 import type { IMongoFile } from '@librechat/data-schemas';
-import type { Agent, TFile } from 'librechat-data-provider';
+import type { Agent, TFile, TEndpoint } from 'librechat-data-provider';
 import type { ServerRequest, InitializeResultBase, EndpointTokenConfig } from '~/types';
 import type { InitializeAgentDbMethods } from '../initialize';
 import type { CodeExecutionContext } from '../execution';
@@ -159,6 +159,7 @@ function createMocks(overrides?: {
   modelDefault?: number;
   maxOutputTokens?: number;
   endpointTokenConfig?: EndpointTokenConfig;
+  customEndpointConfig?: Partial<TEndpoint>;
   useRealTokenLookup?: boolean;
   providerTools?: unknown[];
   loadedToolDefinitions?: Array<{
@@ -176,6 +177,7 @@ function createMocks(overrides?: {
     modelDefault = 200000,
     maxOutputTokens = 4096,
     endpointTokenConfig,
+    customEndpointConfig,
     useRealTokenLookup = false,
     providerTools,
     loadedToolDefinitions = [],
@@ -208,6 +210,7 @@ function createMocks(overrides?: {
   mockGetProviderConfig.mockReturnValue({
     getOptions: mockGetOptions,
     overrideProvider: resolvedOverrideProvider,
+    customEndpointConfig,
   });
 
   mockExtractLibreChatParams.mockReturnValue({
@@ -953,6 +956,50 @@ describe('initializeAgent — custom provider token lookup', () => {
     // optionalChainWithEmptyCheck → Math.max formula. The toHaveBeenCalledWith
     // assertion above catches the actual provider-resolution regression.
     expect(result.maxContextTokens).toBe(Math.round((65536 - 4096) * 0.95));
+  });
+
+  describe('with gateway metadata (models.metadata)', () => {
+    const litellmTokenConfig: EndpointTokenConfig = {
+      'Sonnet 5.5': { context: 1000000, output: 128000, prompt: 2, completion: 10 },
+      'Qwen3 32B': { context: 32000, output: 8000, prompt: 0.15, completion: 0.6 },
+    };
+
+    const run = async (model: string) => {
+      const mocks = createMocks({
+        provider: 'LiteLLM',
+        overrideProvider: Providers.OPENAI,
+        model,
+        endpointTokenConfig: litellmTokenConfig,
+        customEndpointConfig: { name: 'LiteLLM', models: { default: [], metadata: 'litellm' } },
+        useRealTokenLookup: true,
+      });
+      return initializeAgent(
+        {
+          req: mocks.req,
+          res: mocks.res,
+          agent: mocks.agent,
+          loadTools: mocks.loadTools,
+          endpointOption: { endpoint: EModelEndpoint.agents },
+          allowedProviders: new Set(['LiteLLM']),
+          isInitialAgent: true,
+        },
+        mocks.db,
+      );
+    };
+
+    it('budgets each model from its own reported input limit', async () => {
+      const sonnet = await run('Sonnet 5.5');
+      const qwen = await run('Qwen3 32B');
+      expect(sonnet.maxContextTokens).toBe(Math.round((1000000 - 4096) * 0.95));
+      expect(qwen.maxContextTokens).toBe(Math.round((32000 - 4096) * 0.95));
+    });
+
+    it('gives a model the metadata omits the default, not a name-pattern guess', async () => {
+      /** `grok` is a built-in pattern (131072); the public name must not reach it */
+      const result = await run('Grok 4.7');
+      expect(mockGetModelMaxTokens).not.toHaveBeenCalled();
+      expect(result.maxContextTokens).toBe(Math.round((32000 - 4096) * 0.95));
+    });
   });
 });
 

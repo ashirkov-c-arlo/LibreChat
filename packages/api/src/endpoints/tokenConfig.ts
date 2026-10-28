@@ -29,12 +29,16 @@ export async function resolveTokenConfigMap(
   const customEndpoints = (appConfig?.endpoints?.[EModelEndpoint.custom] ?? []) as TEndpoint[];
   const cache = tokenConfigCache();
   const endpointTokenConfigs: Record<string, EndpointTokenConfig | undefined> = {};
+  const metadataEndpoints = new Set<string>();
 
   for (const endpointConfig of customEndpoints) {
     /** Models config and the token-config cache key by the normalized name */
     const name = normalizeEndpointName(endpointConfig?.name);
     if (!name) {
       continue;
+    }
+    if (endpointConfig.models?.metadata != null) {
+      metadataEndpoints.add(name);
     }
     if (endpointConfig.tokenConfig != null) {
       endpointTokenConfigs[name] = endpointConfig.tokenConfig as EndpointTokenConfig;
@@ -49,5 +53,8 @@ export async function resolveTokenConfigMap(
     }
   }
 
-  return buildTokenConfigMap({ modelsConfig, endpointTokenConfigs, includePricing }, deps);
+  return buildTokenConfigMap(
+    { modelsConfig, endpointTokenConfigs, includePricing, metadataEndpoints },
+    deps,
+  );
 }

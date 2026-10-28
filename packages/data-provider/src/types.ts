@@ -20,6 +20,7 @@ import type {
   CodeEnvironmentUserConfigSchema,
   CodeEnvironmentUserSettings,
   TAgentsEndpoint,
+  TChatDefaults,
 } from './config';
 import type { StatefulCodeEnvironment } from './stateful-code';
 import type { CodeApprovalMode } from './code/approval';
@@ -682,6 +683,8 @@ export type TConfig = {
   codeApiUploadConcurrency?: number;
   /** Milliseconds one operation may spend waiting on Code API rate limits. */
   codeApiMaxRetryWaitMs?: number;
+  /** Custom endpoint `chatDefaults`, applied when no modelSpec is active. */
+  chatDefaults?: TChatDefaults;
   customParams?: {
     defaultParamsEndpoint?: string;
     reasoningFormat?: ReasoningParameterFormat;
@@ -705,6 +708,9 @@ export type TModelTokenomics = {
   completion?: number;
   cacheWrite?: number;
   cacheRead?: number;
+  /** Reasoning efforts the gateway reports for the model (custom `models.metadata`).
+   *  Absent when unknown; never inferred from the model name. */
+  reasoningEfforts?: string[];
 };
 
 /** endpoint → model → resolved tokenomics, from GET /api/endpoints/token-config */

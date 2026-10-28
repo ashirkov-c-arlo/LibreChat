@@ -37,6 +37,7 @@ export function loadCustomEndpointsConfig(
         modelDisplayLabel,
         customParams,
         provider,
+        chatDefaults,
       } = endpoint;
       const name = normalizeEndpointName(configName);
 
@@ -64,6 +65,7 @@ export function loadCustomEndpointsConfig(
         customParams: resolvedCustomParams,
         modelDisplayLabel,
         iconURL,
+        chatDefaults,
         providerId: resolveEndpointProviderId({
           name,
           baseURL: resolvedBaseURL,

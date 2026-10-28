@@ -31,6 +31,8 @@ interface BadgeRowProps {
   onToggle?: (badgeId: string, currentActive: boolean) => void;
   conversationId?: string | null;
   specName?: string | null;
+  /** Active endpoint; its `chatDefaults` preset the tool toggles when no spec is active. */
+  endpoint?: string | null;
   isSubmitting?: boolean;
   isInChat: boolean;
 }
@@ -146,6 +148,7 @@ function BadgeRow({
   showEphemeralBadges,
   conversationId,
   specName,
+  endpoint,
   isSubmitting,
   onChange,
   onToggle,
@@ -327,6 +330,7 @@ function BadgeRow({
     <BadgeRowProvider
       conversationId={conversationId}
       specName={specName}
+      endpoint={endpoint}
       isSubmitting={isSubmitting}
       observeToolAuthorization={showEphemeralBadges === true}
     >

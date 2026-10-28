@@ -8,8 +8,8 @@ import {
   useGetAgentsConfig,
   useToolToggle,
 } from '~/hooks';
+import { useGetStartupConfig, useGetEndpointsQuery } from '~/data-provider';
 import { getTimestampedValue } from '~/utils/timestamps';
-import { useGetStartupConfig } from '~/data-provider';
 import { ephemeralAgentByConvoId } from '~/store';
 
 interface BadgeRowContextType {
@@ -37,6 +37,8 @@ interface BadgeRowProviderProps {
   isSubmitting?: boolean;
   conversationId?: string | null;
   specName?: string | null;
+  /** Active endpoint; its `chatDefaults` fill toggles that have no stored value. */
+  endpoint?: string | null;
   observeToolAuthorization?: boolean;
 }
 
@@ -45,12 +47,15 @@ export default function BadgeRowProvider({
   isSubmitting,
   conversationId,
   specName,
+  endpoint,
   observeToolAuthorization = false,
 }: BadgeRowProviderProps) {
   const lastContextKeyRef = useRef<string>('');
   const hasInitializedRef = useRef(false);
   const { agentsConfig } = useGetAgentsConfig();
   const { data: startupConfig } = useGetStartupConfig();
+  const { data: endpointsConfig } = useGetEndpointsQuery();
+  const chatDefaults = endpoint ? endpointsConfig?.[endpoint]?.chatDefaults : undefined;
   const key = conversationId ?? Constants.NEW_CONVO;
   const hasModelSpecs = (startupConfig?.modelSpecs?.list?.length ?? 0) > 0;
 
@@ -93,10 +98,13 @@ export default function BadgeRowProvider({
       hasInitializedRef.current = false;
       return;
     }
+    /** Endpoint and its (possibly late-loading) defaults are part of the context, so a
+     *  switch re-runs the fill; it only sets keys still undefined. */
+    const contextKey = `${storageSuffix}|${endpoint ?? ''}|${chatDefaults ? 1 : 0}`;
     // Check if this is a new conversation/spec or the first load
-    if (!hasInitializedRef.current || lastContextKeyRef.current !== storageSuffix) {
+    if (!hasInitializedRef.current || lastContextKeyRef.current !== contextKey) {
       hasInitializedRef.current = true;
-      lastContextKeyRef.current = storageSuffix;
+      lastContextKeyRef.current = contextKey;
 
       const codeToggleKey = `${LocalStorageKeys.LAST_CODE_TOGGLE_}${storageSuffix}`;
       const webSearchToggleKey = `${LocalStorageKeys.LAST_WEB_SEARCH_TOGGLE_}${storageSuffix}`;
@@ -113,6 +121,17 @@ export default function BadgeRowProvider({
       const memoryToggleValue = getTimestampedValue(memoryToggleKey);
 
       const initialValues: Record<string, boolean | string> = {};
+      /** Stored user choices below override these endpoint defaults. */
+      const defaults: Array<[string, boolean | undefined]> = [
+        [Tools.execute_code, chatDefaults?.executeCode],
+        [Tools.web_search, chatDefaults?.webSearch],
+        [Tools.memory, chatDefaults?.memory],
+      ];
+      for (const [toolKey, value] of defaults) {
+        if (value != null) {
+          initialValues[toolKey] = value;
+        }
+      }
 
       if (codeToggleValue !== null) {
         try {
@@ -208,7 +227,7 @@ export default function BadgeRowProvider({
         return changed ? result : prev;
       });
     }
-  }, [storageSuffix, specName, isSubmitting, setEphemeralAgent]);
+  }, [storageSuffix, specName, isSubmitting, setEphemeralAgent, endpoint, chatDefaults]);
 
   /** CodeInterpreter hook — sandbox auth is handled server-side by the
    *  agents library, so the toggle no longer has an auth dialog gate. */

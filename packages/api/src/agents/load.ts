@@ -22,10 +22,10 @@ import {
   validateMCPServerConfig,
 } from '~/mcp/utils';
 import { ASK_USER_QUESTION_TOOL_NAME } from '~/agents/hitl/askUserQuestionTool';
+import { getCustomEndpointConfig, chatDefaultsAskUser } from '~/app/config';
 import { synthesizeBackgroundToolOptions } from '~/agents/background';
 import { mergeSynthesizedToolOptions } from '~/agents/selection';
 import { synthesizeIntentToolOptions } from '~/agents/intent';
-import { getCustomEndpointConfig } from '~/app/config';
 
 const { mcp_all, mcp_delimiter } = Constants;
 type ModelParametersWithPromptPrefix = AgentModelParameters & { promptPrefix?: string | null };
@@ -117,7 +117,11 @@ export async function loadEphemeralAgent(
   /** Same downstream gating as persisted agents applies: `createRun` only
    *  equips the tool when the request is HITL-capable, the agent is not a
    *  subagent, and the admin hasn't excluded it (filteredTools/includedTools). */
-  if (ephemeralAgent?.ask_user_question === true || modelSpec?.askUserQuestion === true) {
+  if (
+    ephemeralAgent?.ask_user_question === true ||
+    modelSpec?.askUserQuestion === true ||
+    chatDefaultsAskUser({ endpoint, appConfig: req.config, modelSpec })
+  ) {
     tools.push(ASK_USER_QUESTION_TOOL_NAME);
   }
 

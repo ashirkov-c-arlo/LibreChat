@@ -76,6 +76,31 @@ export const getCustomEndpointConfig = ({
 };
 
 /**
+ * Whether a spec-less chat on this custom endpoint gets the `ask_user_question` tool
+ * from `chatDefaults`. A modelSpec, when active, decides on its own. Reads the raw
+ * config: no secret is needed, so none is resolved.
+ */
+export function chatDefaultsAskUser({
+  endpoint,
+  appConfig,
+  modelSpec,
+}: {
+  endpoint?: string | null;
+  appConfig?: AppConfig;
+  modelSpec?: { askUserQuestion?: boolean } | null;
+}): boolean {
+  if (modelSpec != null || endpoint == null || endpoint === '') {
+    return false;
+  }
+  const name = normalizeEndpointName(endpoint);
+  const customEndpoints = appConfig?.endpoints?.[EModelEndpoint.custom] ?? [];
+  return (
+    customEndpoints.find((config) => normalizeEndpointName(config.name) === name)?.chatDefaults
+      ?.askUserQuestion === true
+  );
+}
+
+/**
  * Builds a map of normalized endpoint name -> dropParams for the endpoint shapes that
  * support per-endpoint dropParams: array-configured `custom` endpoints map directly to
  * their dropParams, while `azureOpenAI` maps to a per-model lookup (model name ->
