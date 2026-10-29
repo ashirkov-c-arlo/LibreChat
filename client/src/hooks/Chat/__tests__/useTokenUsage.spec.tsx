@@ -11,10 +11,16 @@ jest.mock('~/hooks/Messages/useLatestMessage', () => ({
   useLatestMessageId: () => 'a2',
 }));
 
+/** The selected model; a test switches it to stand in for a mid-conversation model change. */
+let mockLimits = { maxContextTokens: 200000, endpoint: 'agents', model: 'test-model' };
 jest.mock('~/hooks/Chat/useTokenLimits', () => ({
   __esModule: true,
-  default: () => ({ maxContextTokens: 200000, endpoint: 'agents', model: 'test-model' }),
+  default: () => mockLimits,
 }));
+
+beforeEach(() => {
+  mockLimits = { maxContextTokens: 200000, endpoint: 'agents', model: 'test-model' };
+});
 
 const convo = 'convo-post-snapshot';
 
@@ -271,6 +277,8 @@ describe('useTokenUsage — post-snapshot output', () => {
   });
 
   it('withholds old runway history during a newly configured run', () => {
+    /** The run used the newly selected model */
+    mockLimits = { ...mockLimits, model: 'new-model' };
     const { result } = renderTokenUsage(undefined, {
       snapshot: { ...tailSnapshot, model: 'new-model' },
     });
@@ -368,5 +376,23 @@ describe('useTokenUsage — post-snapshot output', () => {
     });
 
     expect(result.current.compactionReclaim).toBe(10200);
+  });
+});
+
+describe('useTokenUsage — model switched mid-conversation', () => {
+  it('measures against the selected model once it differs from the snapshot', () => {
+    mockLimits = { maxContextTokens: 1000000, endpoint: 'agents', model: 'other-model' };
+
+    const { result } = renderTokenUsage();
+
+    expect(result.current.maxTokens).toBe(1000000);
+    expect(result.current.snapshotActive).toBe(false);
+  });
+
+  it('keeps the snapshot budget while the selected model is the one it measured', () => {
+    const { result } = renderTokenUsage();
+
+    expect(result.current.maxTokens).toBe(200000);
+    expect(result.current.snapshotActive).toBe(true);
   });
 });

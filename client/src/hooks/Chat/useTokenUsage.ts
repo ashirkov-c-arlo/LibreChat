@@ -254,11 +254,22 @@ export default function useTokenUsage({
       snapshot != null &&
       (isSubmitting || (snapshot.anchorMessageId != null && branchTotals.containsAnchor));
 
+    /** A snapshot measures the model that produced it. Once another model is
+     *  selected, its budget no longer applies until that model runs: the
+     *  estimate below takes over with the selected model's limit. A snapshot
+     *  without a model, or a selection without one, is kept as before. */
+    const measuresSelectedModel = (candidate: ContextSnapshot | null) =>
+      isSubmitting || candidate?.model == null || !limits.model || candidate.model === limits.model;
     /** Precedence: live/active snapshot → persisted branch snapshot →
      *  per-message estimate. The first two are authoritative (real runs with the
      *  feature on); the estimate covers snapshot-less branches (pre-feature
      *  history, imports, never-generated branches) entirely client-side. */
-    const effective: ContextSnapshot | null = currentActive ? snapshot : branchSnapshot;
+    let effective: ContextSnapshot | null = null;
+    if (currentActive && measuresSelectedModel(snapshot)) {
+      effective = snapshot;
+    } else if (measuresSelectedModel(branchSnapshot)) {
+      effective = branchSnapshot;
+    }
 
     /** Branch analysis: the snapshot series (oldest → newest) drives the runway
      *  projection. Walks use the branch tail, capped at summary markers,
