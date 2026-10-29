@@ -37,7 +37,7 @@ export async function resolveTokenConfigMap(
     if (!name) {
       continue;
     }
-    if (endpointConfig.models?.metadata != null) {
+    if (endpointConfig.customParams?.modelCatalog != null) {
       metadataEndpoints.add(name);
     }
     if (endpointConfig.tokenConfig != null) {

@@ -190,7 +190,7 @@ export function createLoadConfigModels(deps: LoadConfigModelsDeps) {
             headers: endpointHeaders,
             direct: endpoint.directEndpoint,
             userIdQuery: models.userIdQuery,
-            metadata: models.metadata,
+            metadata: endpoint.customParams?.modelCatalog,
             tokenKey,
           });
         }
@@ -234,7 +234,7 @@ export function createLoadConfigModels(deps: LoadConfigModelsDeps) {
                 headers: baseURLIsUserProvided ? undefined : endpointHeaders,
                 direct: endpoint.directEndpoint,
                 userIdQuery: models.userIdQuery,
-                metadata: models.metadata,
+                metadata: endpoint.customParams?.modelCatalog,
                 skipCache: true,
                 /** Fetched with the user's key/URL — always user-scoped */
                 tokenKey: getTokenConfigKey(endpoint, name, req.user?.id ?? '', tenantId),

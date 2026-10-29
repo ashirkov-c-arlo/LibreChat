@@ -1763,9 +1763,6 @@ export const endpointSchema = baseEndpointSchema.merge(
       default: z.array(modelItemSchema).min(1),
       fetch: z.boolean().optional(),
       userIdQuery: z.boolean().optional(),
-      /** Also read per-model limits, prices and reasoning efforts from the gateway's
-       *  model catalog (`litellm`: `GET /model_group/info`). Omit for list-only fetches. */
-      metadata: z.literal('litellm').optional(),
     }),
     iconURL: z.string().optional(),
     modelDisplayLabel: z.string().optional(),
@@ -1790,6 +1787,12 @@ export const endpointSchema = baseEndpointSchema.merge(
         /** Also reconstructs `reasoning_content` from persisted history across turns (implies `includeReasoningContent`). */
         includeReasoningHistory: z.boolean().optional(),
         paramDefinitions: z.array(paramDefinitionSchema).optional(),
+        /**
+         * A gateway model catalog the endpoint's per-model metadata is read from. `litellm`
+         * reads LiteLLM's `/model_group/info`: each model's reasoning efforts, input limit and
+         * token prices. Omission reads no catalog.
+         */
+        modelCatalog: z.literal('litellm').optional(),
       })
       .strict()
       .optional(),

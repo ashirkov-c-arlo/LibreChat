@@ -958,7 +958,7 @@ describe('initializeAgent — custom provider token lookup', () => {
     expect(result.maxContextTokens).toBe(Math.round((65536 - 4096) * 0.95));
   });
 
-  describe('with gateway metadata (models.metadata)', () => {
+  describe('with gateway metadata (customParams.modelCatalog)', () => {
     const litellmTokenConfig: EndpointTokenConfig = {
       'Sonnet 5.5': { context: 1000000, output: 128000, prompt: 2, completion: 10 },
       'Qwen3 32B': { context: 32000, output: 8000, prompt: 0.15, completion: 0.6 },
@@ -970,7 +970,10 @@ describe('initializeAgent — custom provider token lookup', () => {
         overrideProvider: Providers.OPENAI,
         model,
         endpointTokenConfig: litellmTokenConfig,
-        customEndpointConfig: { name: 'LiteLLM', models: { default: [], metadata: 'litellm' } },
+        customEndpointConfig: {
+          name: 'LiteLLM',
+          customParams: { defaultParamsEndpoint: 'custom', modelCatalog: 'litellm' },
+        },
         useRealTokenLookup: true,
       });
       return initializeAgent(

@@ -58,8 +58,8 @@ export interface FetchModelsParams {
   userObject?: Partial<IUser>;
   /** Skip MODEL_QUERIES cache (e.g., for user-provided keys) */
   skipCache?: boolean;
-  /** Gateway catalog to read per-model metadata from (`models.metadata`) */
-  metadata?: TEndpoint['models']['metadata'];
+  /** Gateway catalog to read per-model metadata from (`customParams.modelCatalog`) */
+  metadata?: NonNullable<TEndpoint['customParams']>['modelCatalog'];
 }
 
 function applyUserProvidedBaseURLProtection(

@@ -137,7 +137,7 @@ describe('processLiteLLMModelGroups', () => {
   });
 });
 
-describe('fetchModels with models.metadata: litellm', () => {
+describe('fetchModels with customParams.modelCatalog: litellm', () => {
   it('lists public names and caches their metadata with the endpoint key', async () => {
     const models = await fetchLiteLLM('LiteLLM', 'litellm');
     expect(models).toEqual(['GPT 6 Luna', 'Sonnet 5.5', 'Qwen3 32B']);

@@ -257,7 +257,7 @@ export async function initializeCustom(
   const hasTokenConfig = endpointConfig.tokenConfig != null;
   const tokenKey = getTokenConfigKey(endpointConfig, endpoint, userId, tenantId);
   const fetchesTokenConfig =
-    endpointConfig.models?.metadata != null ||
+    endpointConfig.customParams?.modelCatalog != null ||
     FetchTokenConfig[endpoint.toLowerCase() as keyof typeof FetchTokenConfig] != null;
 
   if (hasTokenConfig) {
@@ -283,7 +283,7 @@ export async function initializeCustom(
       user: userId,
       tokenKey,
       userObject: user,
-      metadata: endpointConfig.models?.metadata,
+      metadata: endpointConfig.customParams?.modelCatalog,
       // Mirror the security guard in `loadConfigModels`: never forward
       // header overrides when the base URL is user-supplied — configured
       // templates like {{LIBRECHAT_OPENID_ID_TOKEN}} would otherwise resolve

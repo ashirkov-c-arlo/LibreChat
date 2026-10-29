@@ -257,27 +257,26 @@ describe('resolveMetadataEffortConfig', () => {
   });
 });
 
-describe('custom endpoint chatDefaults and models.metadata', () => {
-  const base = { name: 'LiteLLM', apiKey: 'k', baseURL: 'http://x/v1' };
+describe('custom endpoint chatDefaults and customParams.modelCatalog', () => {
+  const base = { name: 'LiteLLM', apiKey: 'k', baseURL: 'http://x/v1', models: { default: ['m'] } };
 
   it('accepts the LiteLLM integration settings', () => {
     const parsed = endpointSchema.parse({
       ...base,
-      models: { default: ['Sonnet 5.5'], fetch: true, metadata: 'litellm' },
+      models: { default: ['Sonnet 5.5'], fetch: true },
+      customParams: { modelCatalog: 'litellm' },
       chatDefaults: { webSearch: true, askUserQuestion: true, reasoningEffort: 'medium' },
     });
-    expect(parsed.models.metadata).toBe('litellm');
+    expect(parsed.customParams?.modelCatalog).toBe('litellm');
     expect(parsed.chatDefaults?.reasoningEffort).toBe('medium');
   });
 
-  it('rejects an unknown metadata source or effort', () => {
-    const models = { default: ['m'] };
+  it('rejects an unknown catalog or effort', () => {
+    expect(endpointSchema.safeParse({ ...base, customParams: { modelCatalog: 'x' } }).success).toBe(
+      false,
+    );
     expect(
-      endpointSchema.safeParse({ ...base, models: { ...models, metadata: 'x' } }).success,
-    ).toBe(false);
-    expect(
-      endpointSchema.safeParse({ ...base, models, chatDefaults: { reasoningEffort: 'turbo' } })
-        .success,
+      endpointSchema.safeParse({ ...base, chatDefaults: { reasoningEffort: 'turbo' } }).success,
     ).toBe(false);
   });
 });

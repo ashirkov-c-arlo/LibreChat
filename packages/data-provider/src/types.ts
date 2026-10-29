@@ -708,7 +708,7 @@ export type TModelTokenomics = {
   completion?: number;
   cacheWrite?: number;
   cacheRead?: number;
-  /** Reasoning efforts the gateway reports for the model (custom `models.metadata`).
+  /** Reasoning efforts the gateway reports for the model (`customParams.modelCatalog`).
    *  Absent when unknown; never inferred from the model name. */
   reasoningEfforts?: string[];
 };

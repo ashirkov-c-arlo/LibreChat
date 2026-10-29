@@ -1344,7 +1344,7 @@ export async function initializeAgent(
   /** Gateway metadata is the sole source for its models: one it does not describe
    *  gets the default, not a guess from its arbitrary public name. */
   const modelMaxTokens =
-    customEndpointConfig?.models?.metadata != null
+    customEndpointConfig?.customParams?.modelCatalog != null
       ? options.endpointTokenConfig?.[tokensModel ?? '']?.context
       : getModelMaxTokens(
           tokensModel ?? '',
