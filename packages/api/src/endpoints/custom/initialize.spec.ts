@@ -725,3 +725,40 @@ describe('initializeCustom – native Anthropic provider', () => {
     expect(options.provider).toBeUndefined();
   });
 });
+
+describe('initializeCustom – LiteLLM catalog effort guard', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  const catalog = {
+    'Sonnet 5.5': { context: 1000000, 'effort:medium': 1 },
+    'Qwen3 VL 235B A22B': { context: 256000 },
+  };
+  const run = async (model: string, modelCatalog?: 'litellm') => {
+    const { tokenConfigCache } = jest.requireMock('~/cache');
+    tokenConfigCache.mockReturnValue({ get: jest.fn().mockResolvedValue(catalog) });
+    const params = createParams({});
+    mockGetCustomEndpointConfig.mockReturnValue({
+      apiKey: 'sk-test-key',
+      baseURL: 'https://litellm.example.com/v1',
+      models: { fetch: true },
+      customParams: modelCatalog ? { modelCatalog } : undefined,
+    });
+    params.model_parameters = { model, reasoning_effort: 'medium' };
+    await initializeCustom(params);
+    return mockGetOpenAIConfig.mock.calls[0][1].modelOptions;
+  };
+
+  it('does not send an effort carried over to a model the catalog reports no levels for', async () => {
+    expect(await run('Qwen3 VL 235B A22B', 'litellm')).not.toHaveProperty('reasoning_effort');
+  });
+
+  it('sends an effort the catalog reports for the model', async () => {
+    expect(await run('Sonnet 5.5', 'litellm')).toMatchObject({ reasoning_effort: 'medium' });
+  });
+
+  it('leaves endpoints without a catalog untouched', async () => {
+    expect(await run('Qwen3 VL 235B A22B')).toMatchObject({ reasoning_effort: 'medium' });
+  });
+});

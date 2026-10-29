@@ -7,6 +7,7 @@ import {
   processLiteLLMModelGroups,
   getLiteLLMModelGroupInfoURL,
 } from '~/endpoints/litellm';
+import { withCatalogEffort } from '~/endpoints/custom/initialize';
 import { buildTokenConfigMap } from '~/endpoints/pricing';
 import { fetchModels } from '~/endpoints/models';
 import { tokenConfigCache } from '~/cache';
@@ -202,5 +203,31 @@ describe('buildTokenConfigMap with metadata endpoints', () => {
       deps,
     );
     expect(map.Other['grok-4'].context).toBeGreaterThan(0);
+  });
+});
+
+describe('withCatalogEffort', () => {
+  const catalog = processLiteLLMModelGroups({ data: groups });
+  const run = (model: string, reasoning_effort?: string) =>
+    withCatalogEffort({ model, reasoning_effort, user: 'u' }, catalog);
+
+  it('drops an effort carried over to a model the catalog reports no levels for', () => {
+    expect(run('Qwen3 32B', 'medium')).toEqual({ model: 'Qwen3 32B', user: 'u' });
+    expect(run('GPT 6 Luna', 'high')).not.toHaveProperty('reasoning_effort');
+  });
+
+  it('drops an effort outside the levels the catalog reports', () => {
+    expect(run('Sonnet 5.5', 'turbo')).not.toHaveProperty('reasoning_effort');
+  });
+
+  it('keeps a reported effort', () => {
+    expect(run('Sonnet 5.5', 'max')).toMatchObject({ reasoning_effort: 'max' });
+  });
+
+  it('keeps the effort when nothing confirms it is unsupported', () => {
+    expect(run('Not In Catalog', 'high')).toMatchObject({ reasoning_effort: 'high' });
+    expect(
+      withCatalogEffort({ model: 'Qwen3 32B', reasoning_effort: 'high' }, undefined),
+    ).toMatchObject({ reasoning_effort: 'high' });
   });
 });

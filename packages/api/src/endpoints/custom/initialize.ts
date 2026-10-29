@@ -20,6 +20,7 @@ import { extractDefaultParams } from '~/endpoints/openai/llm';
 import { isUserProvided, checkUserKeyExpiry } from '~/utils';
 import { getOpenAIConfig } from '~/endpoints/openai/config';
 import { getScopedTokenConfigKey } from '~/endpoints/keys';
+import { getReasoningEfforts } from '~/endpoints/litellm';
 import { getCustomEndpointConfig } from '~/app/config';
 import { resolveEndpointRuntime } from '~/types';
 import { fetchModels } from '~/endpoints/models';
@@ -87,6 +88,31 @@ function toBillingTokenConfig(
     result[model] = mapped as EndpointTokenConfig[string];
   }
   return result;
+}
+
+/**
+ * Drops a stored `reasoning_effort` the gateway catalog does not report for the model — one
+ * carried over from a model the conversation used before. Sending it fails the request on a
+ * provider without reasoning parameters. A model the catalog does not describe, or no catalog at
+ * all (unavailable or not configured), keeps the value: nothing confirms it is unsupported.
+ */
+export function withCatalogEffort<T extends Record<string, unknown>>(
+  modelOptions: T,
+  catalog?: EndpointTokenConfig,
+): T {
+  const { model, reasoning_effort: effort } = modelOptions;
+  if (catalog == null || typeof model !== 'string' || effort == null || effort === '') {
+    return modelOptions;
+  }
+  if (!Object.prototype.hasOwnProperty.call(catalog, model)) {
+    return modelOptions;
+  }
+  if (getReasoningEfforts(catalog[model])?.includes(String(effort)) === true) {
+    return modelOptions;
+  }
+  const rest: Record<string, unknown> = { ...modelOptions };
+  delete rest.reasoning_effort;
+  return rest as T;
 }
 
 /**
@@ -314,7 +340,10 @@ export async function initializeCustom(
     ...customOptions,
   };
 
-  const modelOptions = { ...(model_parameters ?? {}), user: userId };
+  const modelOptions = withCatalogEffort(
+    { ...(model_parameters ?? {}), user: userId },
+    endpointConfig.customParams?.modelCatalog != null ? endpointTokenConfig : undefined,
+  );
 
   let options: InitializeResultBase;
   if (endpointConfig.provider === EModelEndpoint.anthropic) {
