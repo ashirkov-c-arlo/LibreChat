@@ -171,6 +171,13 @@ export default function useSelectMention({
       if (model) {
         template.model = model;
       }
+      /** A context limit belongs to the model it was set or computed for (the server saves its
+       *  computed budget on the conversation), so it does not carry over: the new model's own
+       *  window applies, in the gauge and in the request. */
+      const modelChanged = model !== '' && model !== conversation?.model;
+      if (modelChanged) {
+        template.maxContextTokens = undefined;
+      }
 
       const assistant_id = kwargs.assistant_id ?? '';
       if (assistant_id) {
@@ -196,6 +203,7 @@ export default function useSelectMention({
             iconURL: null,
             modelLabel: null,
             endpointType: template.endpointType,
+            ...(modelChanged && { maxContextTokens: undefined }),
           },
           preset: template,
         });
