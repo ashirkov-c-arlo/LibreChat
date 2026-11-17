@@ -1,4 +1,4 @@
-import { getBestSupportedMimeType, findPhysicalMicrophone } from './useSpeechToTextExternal';
+import { getBestSupportedMimeType } from './useSpeechToTextExternal';
 
 const preferredMimeTypes = [
   'audio/ogg;codecs=opus',
@@ -36,26 +36,5 @@ describe('getBestSupportedMimeType', () => {
 
     expect(getBestSupportedMimeType(isTypeSupported, userAgent)).toBe(expected);
     expect(isTypeSupported.mock.calls.map(([type]) => type)).toEqual(preferredMimeTypes);
-  });
-});
-
-const audioInput = (
-  deviceId: string,
-  label: string,
-): Pick<MediaDeviceInfo, 'deviceId' | 'kind' | 'label'> => ({
-  deviceId,
-  kind: 'audioinput',
-  label,
-});
-
-describe('findPhysicalMicrophone', () => {
-  it('skips LibreChat capture sources', () => {
-    const microphone = findPhysicalMicrophone([
-      audioInput('browser', 'LibreChat Browser Capture'),
-      audioInput('zoom', 'LibreChat Zoom Capture'),
-      audioInput('microphone', 'Built-in Audio Analog Stereo'),
-    ]);
-
-    expect(microphone?.deviceId).toBe('microphone');
   });
 });

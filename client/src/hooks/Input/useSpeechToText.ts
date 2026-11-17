@@ -3,21 +3,18 @@ import useSpeechToTextBrowser from './useSpeechToTextBrowser';
 import useGetAudioSettings from './useGetAudioSettings';
 
 const useSpeechToText = (
-  setText: (text: string) => void,
-  onTranscriptionComplete: (text: string) => void,
+  setText: (text: string, takeId?: number) => void,
+  onTranscriptionComplete: (text: string, takeId?: number) => void,
+  onTranscriptionSettled: (takeId?: number) => void,
+  /** Host-owned Auto Send Text preference. */
+  autoSendText: number,
 ): {
   isLoading?: boolean;
   isListening?: boolean;
-  isBrowserAudioLoading: boolean;
-  isBrowserAudioListening: boolean;
-  stopRecording: () => void | boolean;
-  startRecording: () => void | Promise<void>;
-  stopBrowserAudioRecording: () => boolean;
-  startBrowserAudioRecording: () => Promise<void>;
-  browserCaptureDevices: { deviceId: string; label: string }[];
-  selectedBrowserCaptureDeviceId: string | null;
-  loadBrowserCaptureDevices: () => Promise<void>;
-  selectBrowserCaptureDevice: (deviceId: string) => Promise<void>;
+  stopRecording: () => void | Promise<void>;
+  startRecording: (takeId?: number) => void | Promise<void>;
+  /** Ends capture without producing a transcript. */
+  abortRecording: () => void;
 } => {
   const { speechToTextEndpoint } = useGetAudioSettings();
   const externalSpeechToText = speechToTextEndpoint === 'external';
@@ -27,22 +24,26 @@ const useSpeechToText = (
     isLoading: speechIsLoadingBrowser,
     startRecording: startSpeechRecordingBrowser,
     stopRecording: stopSpeechRecordingBrowser,
-  } = useSpeechToTextBrowser(setText, onTranscriptionComplete);
+    abortRecording: abortSpeechRecordingBrowser,
+  } = useSpeechToTextBrowser(
+    setText,
+    onTranscriptionComplete,
+    onTranscriptionSettled,
+    autoSendText,
+  );
 
   const {
     isListening: speechIsListeningExternal,
     isLoading: speechIsLoadingExternal,
     externalStartRecording: startSpeechRecordingExternal,
     externalStopRecording: stopSpeechRecordingExternal,
-    isBrowserAudioLoading,
-    isBrowserAudioListening,
-    stopBrowserAudioRecording,
-    startBrowserAudioRecording,
-    browserCaptureDevices,
-    selectedBrowserCaptureDeviceId,
-    loadBrowserCaptureDevices,
-    selectBrowserCaptureDevice,
-  } = useSpeechToTextExternal(setText, onTranscriptionComplete);
+    externalAbortRecording: abortSpeechRecordingExternal,
+  } = useSpeechToTextExternal(
+    setText,
+    onTranscriptionComplete,
+    onTranscriptionSettled,
+    autoSendText,
+  );
 
   const isListening = externalSpeechToText ? speechIsListeningExternal : speechIsListeningBrowser;
   const isLoading = externalSpeechToText ? speechIsLoadingExternal : speechIsLoadingBrowser;
@@ -54,19 +55,16 @@ const useSpeechToText = (
     ? stopSpeechRecordingExternal
     : stopSpeechRecordingBrowser;
 
+  const abortRecording = externalSpeechToText
+    ? abortSpeechRecordingExternal
+    : abortSpeechRecordingBrowser;
+
   return {
     isLoading,
     isListening,
-    isBrowserAudioLoading,
-    isBrowserAudioListening,
     stopRecording,
     startRecording,
-    stopBrowserAudioRecording,
-    startBrowserAudioRecording,
-    browserCaptureDevices,
-    selectedBrowserCaptureDeviceId,
-    loadBrowserCaptureDevices,
-    selectBrowserCaptureDevice,
+    abortRecording,
   };
 };
 

@@ -1,17 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRecoilState } from 'recoil';
 import { useToastContext } from '@librechat/client';
 import { useSpeechToTextMutation } from '~/data-provider';
-import useLocalize from '~/hooks/useLocalize';
+import { getMicrophoneStream } from './capture';
 import store from '~/store';
-
-type RecordingSource = 'microphone' | 'browser';
-
-type BrowserCaptureDevice = { deviceId: string; label: string };
-type AudioInputDevice = Pick<MediaDeviceInfo, 'deviceId' | 'kind' | 'label'>;
-
-const BROWSER_CAPTURE_PREFIX = 'librechat_';
-const BROWSER_CAPTURE_DEVICE_KEY = 'librechatBrowserCaptureDeviceId';
 
 export const getBestSupportedMimeType = (
   isTypeSupported: (type: string) => boolean = (type) =>
@@ -43,491 +35,352 @@ export const getBestSupportedMimeType = (
   return 'audio/webm';
 };
 
-const getFileExtension = (mimeType: string) => {
-  if (mimeType.includes('mp4')) {
-    return 'm4a';
-  }
-  if (mimeType.includes('ogg')) {
-    return 'ogg';
-  }
-  if (mimeType.includes('wav')) {
-    return 'wav';
-  }
-  return 'webm';
-};
-
-const normalizeDeviceLabel = (label: string) => label.toLowerCase().replace(/[^a-z0-9]+/g, '_');
-
-const matchesBrowserCaptureDevice = (label: string) =>
-  normalizeDeviceLabel(label).startsWith(BROWSER_CAPTURE_PREFIX);
-
-const isLibreChatCaptureDevice = (label: string) =>
-  normalizeDeviceLabel(label).includes(BROWSER_CAPTURE_PREFIX);
-
-export const findPhysicalMicrophone = (devices: AudioInputDevice[]) =>
-  devices.find(
-    (device) =>
-      device.kind === 'audioinput' &&
-      device.label !== '' &&
-      !isLibreChatCaptureDevice(device.label),
-  );
-
-const isMissingDeviceError = (error: Error) =>
-  error.name === 'NotFoundError' || error.name === 'OverconstrainedError';
-
-const browserCaptureConstraints = (deviceId?: string): MediaTrackConstraints => ({
-  ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
-  echoCancellation: false,
-  noiseSuppression: false,
-  autoGainControl: false,
-});
-
 const useSpeechToTextExternal = (
-  setText: (text: string) => void,
-  onTranscriptionComplete: (text: string) => void,
+  setText: (text: string, takeId?: number) => void,
+  onTranscriptionComplete: (text: string, takeId?: number) => void,
+  onTranscriptionSettled: (takeId?: number) => void,
+  autoSendText: number,
 ) => {
-  const localize = useLocalize();
   const { showToast } = useToastContext();
-  const audioStreamRef = useRef<MediaStream | null>(null);
+  const audioStream = useRef<MediaStream | null>(null);
   const animationFrameIdRef = useRef<number | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const recordingSourceRef = useRef<RecordingSource | null>(null);
-  const busySourceRef = useRef<RecordingSource | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
-  const mountedRef = useRef(true);
-  const discardRecordingRef = useRef(false);
-  const pendingSwitchDeviceRef = useRef<string | null>(null);
 
-  const [recordingSource, setRecordingSource] = useState<RecordingSource | null>(null);
-  const [requestingSource, setRequestingSource] = useState<RecordingSource | null>(null);
-  const [finalizingSource, setFinalizingSource] = useState<RecordingSource | null>(null);
-  const [browserCaptureDevices, setBrowserCaptureDevices] = useState<BrowserCaptureDevice[]>([]);
-  const [selectedBrowserCaptureDeviceId, setSelectedBrowserCaptureDeviceId] = useState<
-    string | null
-  >(() =>
-    typeof localStorage === 'undefined' ? null : localStorage.getItem(BROWSER_CAPTURE_DEVICE_KEY),
-  );
+  const audioChunksRef = useRef<Blob[]>([]);
+  /** Read by the recorder's `stop` handler, which fires a tick after the call
+   *  that ended capture and cannot otherwise tell an abort from a stop. */
+  const abortedRef = useRef(false);
+  /** Cleared on unmount so a queued auto-send cannot fire into a gone composer. */
+  const autoSendTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Guards the async permission request: a stream that resolves after unmount
+   *  would otherwise hold the microphone open with nothing left to stop it. */
+  const isMountedRef = useRef(true);
+  /** The type the recorder was actually constructed with. `handleStop` runs
+   *  from a listener registered at start, so state read there is a render
+   *  behind and could pack the blob as a format the audio is not in. */
+  const audioMimeTypeRef = useRef<string>('');
+  const recordingTakeIdRef = useRef<number | undefined>(undefined);
+  const [isListening, setIsListening] = useState(false);
+  const [isRequestBeingMade, setIsRequestBeingMade] = useState(false);
 
   const [minDecibels] = useRecoilState(store.decibelValue);
-  const [autoSendText] = useRecoilState(store.autoSendText);
   const [languageSTT] = useRecoilState<string>(store.languageSTT);
   const [speechToText] = useRecoilState<boolean>(store.speechToText);
   const [autoTranscribeAudio] = useRecoilState<boolean>(store.autoTranscribeAudio);
 
-  const resetBusyState = () => {
-    busySourceRef.current = null;
-    if (!mountedRef.current) {
-      return;
+  const { mutate: processAudio, isLoading: isProcessing } = useSpeechToTextMutation();
+
+  const getFileExtension = (mimeType: string) => {
+    if (mimeType.includes('mp4')) {
+      return 'm4a';
+    } else if (mimeType.includes('ogg')) {
+      return 'ogg';
+    } else if (mimeType.includes('wav')) {
+      return 'wav';
+    } else {
+      return 'webm';
     }
-    setRequestingSource(null);
-    setRecordingSource(null);
-    setFinalizingSource(null);
   };
 
-  const { mutate: processAudio } = useSpeechToTextMutation({
-    onSuccess: (data) => {
-      if (!mountedRef.current) {
+  const cleanup = () => {
+    if (mediaRecorderRef.current) {
+      mediaRecorderRef.current = null;
+    }
+  };
+
+  const getMicrophonePermission = async () => {
+    try {
+      const streamData = await getMicrophoneStream();
+      if (!isMountedRef.current) {
+        streamData?.getTracks().forEach((track) => track.stop());
         return;
       }
-      const extractedText = data.text;
-      setText(extractedText);
-      resetBusyState();
+      audioStream.current = streamData ?? null;
+    } catch {
+      audioStream.current = null;
+    }
+  };
 
-      if (autoSendText > -1 && speechToText && extractedText.length > 0) {
-        setTimeout(() => onTranscriptionComplete(extractedText), autoSendText * 1000);
+  const handleStop = () => {
+    if (abortedRef.current) {
+      abortedRef.current = false;
+      audioChunksRef.current = [];
+      cleanup();
+      return;
+    }
+
+    if (audioChunksRef.current.length > 0) {
+      const audioBlob = new Blob(audioChunksRef.current, { type: audioMimeTypeRef.current });
+      const fileExtension = getFileExtension(audioMimeTypeRef.current);
+
+      audioChunksRef.current = [];
+
+      const formData = new FormData();
+      formData.append('audio', audioBlob, `audio.${fileExtension}`);
+      if (languageSTT) {
+        formData.append('language', languageSTT);
       }
-    },
-    onError: () => {
-      if (!mountedRef.current) {
-        return;
-      }
-      showToast({
-        message: 'An error occurred while processing the audio, maybe the audio was too short',
-        status: 'error',
+      setIsRequestBeingMade(true);
+      cleanup();
+      const takeId = recordingTakeIdRef.current;
+      processAudio(formData, {
+        onSuccess: (data) => {
+          if (!isMountedRef.current) {
+            return;
+          }
+          const extractedText = data.text;
+          setText(extractedText, takeId);
+          setIsRequestBeingMade(false);
+          onTranscriptionSettled(takeId);
+          if (autoSendText > -1 && speechToText && extractedText.length > 0) {
+            if (autoSendTimerRef.current != null) {
+              clearTimeout(autoSendTimerRef.current);
+              autoSendTimerRef.current = null;
+            }
+            autoSendTimerRef.current = setTimeout(() => {
+              autoSendTimerRef.current = null;
+              onTranscriptionComplete(extractedText, takeId);
+            }, autoSendText * 1000);
+          }
+        },
+        onError: () => {
+          showToast({
+            message: 'An error occurred while processing the audio, maybe the audio was too short',
+            status: 'error',
+          });
+          setIsRequestBeingMade(false);
+          onTranscriptionSettled(takeId);
+        },
       });
-      resetBusyState();
-    },
-  });
-
-  const stopMonitoring = () => {
-    if (animationFrameIdRef.current !== null) {
-      window.cancelAnimationFrame(animationFrameIdRef.current);
-      animationFrameIdRef.current = null;
-    }
-    if (audioContextRef.current) {
-      void audioContextRef.current.close();
-      audioContextRef.current = null;
+    } else {
+      showToast({ message: 'The audio was too short', status: 'warning' });
+      onTranscriptionSettled(recordingTakeIdRef.current);
     }
   };
 
-  const stopTracks = () => {
-    audioStreamRef.current?.getTracks().forEach((track) => track.stop());
-    audioStreamRef.current = null;
-  };
-
-  const cleanupMedia = () => {
-    stopMonitoring();
-    stopTracks();
-    mediaRecorderRef.current = null;
-    recordingSourceRef.current = null;
-  };
-
-  const requestAudioStream = (deviceId?: string) =>
-    navigator.mediaDevices.getUserMedia({
-      audio: browserCaptureConstraints(deviceId),
-      video: false,
-    });
-
-  const requestMicrophoneStream = (deviceId?: string) =>
-    navigator.mediaDevices.getUserMedia({
-      audio: deviceId ? { deviceId: { exact: deviceId } } : true,
-      video: false,
-    });
-
-  const getMicrophoneStream = async () => {
-    let microphone = findPhysicalMicrophone(await navigator.mediaDevices.enumerateDevices());
-    if (microphone) {
-      return requestMicrophoneStream(microphone.deviceId);
-    }
-
-    const stream = await requestMicrophoneStream();
-    const track = stream.getAudioTracks()[0];
-    if (!track?.label || !isLibreChatCaptureDevice(track.label)) {
-      return stream;
-    }
-
-    stream.getTracks().forEach((item) => item.stop());
-    microphone = findPhysicalMicrophone(await navigator.mediaDevices.enumerateDevices());
-    if (!microphone) {
-      throw new DOMException('Physical microphone not found', 'NotFoundError');
-    }
-    return requestMicrophoneStream(microphone.deviceId);
-  };
-
-  const saveBrowserCaptureDevice = (stream: MediaStream) => {
-    const deviceId = stream.getAudioTracks()[0]?.getSettings().deviceId;
-    if (deviceId) {
-      localStorage.setItem(BROWSER_CAPTURE_DEVICE_KEY, deviceId);
-    }
-    return stream;
-  };
-
-  const getBrowserCaptureStream = async () => {
-    const savedDeviceId = localStorage.getItem(BROWSER_CAPTURE_DEVICE_KEY);
-    if (savedDeviceId) {
-      try {
-        return saveBrowserCaptureDevice(await requestAudioStream(savedDeviceId));
-      } catch (error) {
-        if (!(error instanceof Error) || !isMissingDeviceError(error)) {
-          throw error;
-        }
-        localStorage.removeItem(BROWSER_CAPTURE_DEVICE_KEY);
-      }
-    }
-
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    const audioInputs = devices.filter((device) => device.kind === 'audioinput');
-    const captureDevice = audioInputs.find((device) => matchesBrowserCaptureDevice(device.label));
-
-    if (captureDevice) {
-      return saveBrowserCaptureDevice(await requestAudioStream(captureDevice.deviceId));
-    }
-    if (audioInputs.some((device) => device.label !== '')) {
-      throw new DOMException('Browser capture device not found', 'NotFoundError');
-    }
-
-    showToast({
-      message: localize('com_ui_browser_audio_select_device'),
-      status: 'info',
-    });
-    const stream = await requestAudioStream();
-    const track = stream.getAudioTracks()[0];
-    if (track?.label && !matchesBrowserCaptureDevice(track.label)) {
-      stream.getTracks().forEach((item) => item.stop());
-      throw new DOMException('Browser capture device not selected', 'NotFoundError');
-    }
-    return saveBrowserCaptureDevice(stream);
-  };
-
-  const getAudioStream = (source: RecordingSource) => {
-    if (source === 'browser') {
-      return getBrowserCaptureStream();
-    }
-    return getMicrophoneStream();
-  };
-
-  const handleCaptureError = (error: Error) => {
-    if (isMissingDeviceError(error)) {
-      localStorage.removeItem(BROWSER_CAPTURE_DEVICE_KEY);
-      showToast({ message: localize('com_ui_browser_audio_unavailable'), status: 'error' });
-      return;
-    }
-    if (error.name === 'NotAllowedError' || error.name === 'SecurityError') {
-      showToast({ message: localize('com_ui_browser_audio_permission_denied'), status: 'error' });
-      return;
-    }
-    showToast({ message: localize('com_ui_browser_audio_error'), status: 'error' });
-  };
-
-  const finishRecording = (source: RecordingSource, mimeType: string) => {
-    const audioChunks = audioChunksRef.current;
-    audioChunksRef.current = [];
-    cleanupMedia();
-
-    if (source === 'browser' && pendingSwitchDeviceRef.current) {
-      // A device switch was requested mid-capture: discard the in-flight audio
-      // and restart the browser capture on the newly selected device.
-      pendingSwitchDeviceRef.current = null;
-      resetBusyState();
-      void startRecording('browser');
-      return;
-    }
-
-    if (discardRecordingRef.current) {
-      return;
-    }
-    if (audioChunks.length === 0 || audioChunks.every((chunk) => chunk.size === 0)) {
-      showToast({
-        message:
-          source === 'browser'
-            ? localize('com_ui_browser_audio_too_short')
-            : 'The audio was too short',
-        status: 'warning',
-      });
-      resetBusyState();
-      return;
-    }
-
-    const audioBlob = new Blob(audioChunks, { type: mimeType });
-    const audioFile = new File([audioBlob], `audio.${getFileExtension(mimeType)}`, {
-      type: mimeType,
-    });
-    const formData = new FormData();
-    formData.append('audio', audioFile);
-    if (languageSTT) {
-      formData.append('language', languageSTT);
-    }
-    processAudio(formData);
-  };
-
-  const stopRecording = (source: RecordingSource) => {
-    const recorder = mediaRecorderRef.current;
-    if (!recorder || recorder.state !== 'recording' || recordingSourceRef.current !== source) {
-      return false;
-    }
-
-    if (mountedRef.current) {
-      setRecordingSource(null);
-      setFinalizingSource(source);
-    }
-    recorder.stop();
-    return true;
-  };
-
-  const monitorSilence = (stream: MediaStream) => {
+  const monitorSilence = (stream: MediaStream, stopRecording: () => void) => {
+    /* Held so it can be closed again: without this the ref below is never
+       assigned, its guard is always true, and every take leaves another audio
+       context open until the browser refuses to grant one. */
     const audioContext = new AudioContext();
     audioContextRef.current = audioContext;
+    const audioStreamSource = audioContext.createMediaStreamSource(stream);
     const analyser = audioContext.createAnalyser();
     analyser.minDecibels = minDecibels;
-    audioContext.createMediaStreamSource(stream).connect(analyser);
+    audioStreamSource.connect(analyser);
 
-    const domainData = new Uint8Array(analyser.frequencyBinCount);
+    const bufferLength = analyser.frequencyBinCount;
+    const domainData = new Uint8Array(bufferLength);
     let lastSoundTime = Date.now();
+
     const detectSound = () => {
       analyser.getByteFrequencyData(domainData);
-      if (domainData.some((value) => value > 0)) {
+      const isSoundDetected = domainData.some((value) => value > 0);
+
+      if (isSoundDetected) {
         lastSoundTime = Date.now();
       }
-      if (Date.now() - lastSoundTime > 3000) {
-        stopRecording('microphone');
+
+      const timeSinceLastSound = Date.now() - lastSoundTime;
+      const isOverSilenceThreshold = timeSinceLastSound > 3000;
+
+      if (isOverSilenceThreshold) {
+        stopRecording();
         return;
       }
+
       animationFrameIdRef.current = window.requestAnimationFrame(detectSound);
     };
+
     animationFrameIdRef.current = window.requestAnimationFrame(detectSound);
   };
 
-  const startRecording = async (source: RecordingSource) => {
-    if (busySourceRef.current) {
+  /** Stops and drops the capture this hook owns; safe to call more than once. */
+  const releaseAudioStream = () => {
+    audioStream.current?.getTracks().forEach((track) => track.stop());
+    audioStream.current = null;
+  };
+
+  const startRecording = async (takeId?: number) => {
+    recordingTakeIdRef.current = takeId;
+    if (isRequestBeingMade) {
+      showToast({ message: 'A request is already being made. Please wait.', status: 'warning' });
       return;
     }
+
+    /* Checked before the microphone is requested, and here rather than in
+       `externalStartRecording`, so every caller — the mic button, the dictation
+       shortcut, an auto-start — is covered. A webview that exposes
+       `getUserMedia` without `MediaRecorder` would otherwise hold a live
+       capture that no Stop control can reach: construction throws after
+       permission is granted, `isListening` stays false, and the tracks run
+       until the composer unmounts. */
     if (typeof MediaRecorder === 'undefined') {
       showToast({ message: 'MediaRecorder is not supported in this browser', status: 'error' });
       return;
     }
 
-    busySourceRef.current = source;
-    setRequestingSource(source);
-    try {
-      const stream = await getAudioStream(source);
-      if (!mountedRef.current) {
-        stream.getTracks().forEach((track) => track.stop());
-        return;
-      }
+    if (!audioStream.current) {
+      await getMicrophonePermission();
+    }
 
-      audioStreamRef.current = stream;
-      audioChunksRef.current = [];
-      const preferredMimeType = getBestSupportedMimeType();
-      const recorder = new MediaRecorder(stream, { mimeType: preferredMimeType });
-      const mimeType = recorder.mimeType || preferredMimeType;
-      mediaRecorderRef.current = recorder;
-      recordingSourceRef.current = source;
-      recorder.addEventListener('dataavailable', (event: BlobEvent) => {
-        if (event.data.size > 0) {
+    if (audioStream.current) {
+      try {
+        audioChunksRef.current = [];
+        abortedRef.current = false;
+        const bestMimeType = getBestSupportedMimeType();
+        audioMimeTypeRef.current = bestMimeType;
+
+        mediaRecorderRef.current = new MediaRecorder(audioStream.current, {
+          mimeType: bestMimeType,
+        });
+        mediaRecorderRef.current.addEventListener('dataavailable', (event: BlobEvent) => {
           audioChunksRef.current.push(event.data);
+        });
+        mediaRecorderRef.current.addEventListener('stop', handleStop);
+        mediaRecorderRef.current.start(100);
+        if (!audioContextRef.current && autoTranscribeAudio && speechToText) {
+          monitorSilence(audioStream.current, stopRecording);
         }
-      });
-      recorder.addEventListener('stop', () => finishRecording(source, mimeType), { once: true });
-      if (source === 'browser') {
-        stream.getAudioTracks()[0]?.addEventListener(
-          'ended',
-          () => {
-            if (recordingSourceRef.current !== 'browser' || discardRecordingRef.current) {
-              return;
-            }
-            showToast({ message: localize('com_ui_browser_audio_unavailable'), status: 'error' });
-            stopRecording('browser');
-          },
-          { once: true },
-        );
+        setIsListening(true);
+      } catch (error) {
+        /* The recorder never started, so nothing else will release the stream:
+           `stopRecording` returns early without a recorder and unmount cleanup
+           is the only other path. Leaving it open keeps the microphone light on
+           behind a UI that offers no way to stop it. */
+        releaseAudioStream();
+        cleanup();
+        showToast({ message: `Error starting recording: ${error}`, status: 'error' });
       }
-      recorder.start(100);
-      setRequestingSource(null);
-      setRecordingSource(source);
-
-      if (source === 'microphone' && autoTranscribeAudio && speechToText) {
-        monitorSilence(stream);
-      }
-    } catch (error) {
-      cleanupMedia();
-      resetBusyState();
-      if (source === 'browser') {
-        handleCaptureError(error instanceof Error ? error : new Error(String(error)));
-        return;
-      }
+    } else {
       showToast({ message: 'Microphone permission not granted', status: 'error' });
     }
   };
 
-  const listBrowserCaptureDevices = async (): Promise<BrowserCaptureDevice[]> => {
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    return devices
-      .filter((device) => device.kind === 'audioinput' && matchesBrowserCaptureDevice(device.label))
-      .map((device) => ({ deviceId: device.deviceId, label: device.label }));
-  };
-
-  const refreshBrowserCaptureDevices = async () => {
-    try {
-      const captureDevices = await listBrowserCaptureDevices();
-      if (mountedRef.current) {
-        setBrowserCaptureDevices(captureDevices);
-      }
-    } catch {
-      /* enumeration failures are non-fatal for the selector */
+  /** Releases the silence monitor's audio graph; safe to call more than once. */
+  const closeAudioContext = () => {
+    const context = audioContextRef.current;
+    audioContextRef.current = null;
+    if (context != null && context.state !== 'closed') {
+      void context.close().catch(() => undefined);
     }
   };
 
-  const loadBrowserCaptureDevices = async () => {
-    try {
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const hasLabels = devices.some(
-        (device) => device.kind === 'audioinput' && device.label !== '',
-      );
-      if (!hasLabels) {
-        /**
-         * Device labels stay hidden until microphone access is granted for this
-         * page load, so we cannot filter by the librechat_ prefix yet. Probe for
-         * permission once (this shows Firefox's native prompt), then release the
-         * stream and re-enumerate now that labels are exposed.
-         */
-        const probe = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-        probe.getTracks().forEach((track) => track.stop());
-      }
-      await refreshBrowserCaptureDevices();
-    } catch (error) {
-      handleCaptureError(error instanceof Error ? error : new Error(String(error)));
-    }
-  };
-
-  const selectBrowserCaptureDevice = async (deviceId: string) => {
-    localStorage.setItem(BROWSER_CAPTURE_DEVICE_KEY, deviceId);
-    if (mountedRef.current) {
-      setSelectedBrowserCaptureDeviceId(deviceId);
-    }
-
-    if (recordingSourceRef.current === 'browser') {
-      /**
-       * Switch on the go: stop the in-flight capture and let finishRecording
-       * restart the browser recording on the newly selected device.
-       */
-      pendingSwitchDeviceRef.current = deviceId;
-      stopRecording('browser');
+  const stopRecording = () => {
+    if (!mediaRecorderRef.current) {
       return;
     }
 
-    /**
-     * Not recording (variant A): only arm the device. Acquiring the stream now
-     * makes Firefox prompt for access when this device has not been granted
-     * yet; we immediately release it so no hot mic stays open.
-     */
-    try {
-      const stream = await requestAudioStream(deviceId);
-      stream.getTracks().forEach((track) => track.stop());
-      await refreshBrowserCaptureDevices();
-    } catch (error) {
-      handleCaptureError(error instanceof Error ? error : new Error(String(error)));
-    }
-  };
+    if (mediaRecorderRef.current.state === 'recording') {
+      mediaRecorderRef.current.stop();
 
-  useEffect(() => {
-    const mediaDevices = navigator.mediaDevices;
-    if (!mediaDevices?.addEventListener) {
-      return;
-    }
-    const handleDeviceChange = () => {
-      void refreshBrowserCaptureDevices();
-    };
-    mediaDevices.addEventListener('devicechange', handleDeviceChange);
-    return () => mediaDevices.removeEventListener('devicechange', handleDeviceChange);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+      audioStream.current?.getTracks().forEach((track) => track.stop());
+      audioStream.current = null;
 
-  useEffect(
-    () => () => {
-      mountedRef.current = false;
-      discardRecordingRef.current = true;
-      const recorder = mediaRecorderRef.current;
-      if (recorder?.state === 'recording') {
-        recorder.stop();
-      }
       if (animationFrameIdRef.current !== null) {
         window.cancelAnimationFrame(animationFrameIdRef.current);
+        animationFrameIdRef.current = null;
       }
-      if (audioContextRef.current) {
-        void audioContextRef.current.close();
+      closeAudioContext();
+
+      setIsListening(false);
+    } else {
+      showToast({ message: 'MediaRecorder is not recording', status: 'error' });
+    }
+  };
+  const externalStartRecording = (takeId?: number) => {
+    if (isListening) {
+      showToast({ message: 'Already listening. Please stop recording first.', status: 'warning' });
+      return;
+    }
+
+    void startRecording(takeId);
+  };
+
+  const externalStopRecording = () => {
+    if (!isListening) {
+      showToast({
+        message: 'Not currently recording. Please start recording first.',
+        status: 'warning',
+      });
+      return;
+    }
+
+    stopRecording();
+  };
+
+  /**
+   * Drops the take without transcribing it. `handleStop` is where the audio is
+   * packed into a FormData and uploaded, so an abort has to reach it: the flag
+   * is what stops a discarded take from spending a transcription request.
+   */
+  const externalAbortRecording = () => {
+    abortedRef.current = true;
+    audioChunksRef.current = [];
+
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== 'inactive') {
+      recorder.stop();
+    }
+
+    audioStream.current?.getTracks().forEach((track) => track.stop());
+    audioStream.current = null;
+
+    if (animationFrameIdRef.current !== null) {
+      window.cancelAnimationFrame(animationFrameIdRef.current);
+      animationFrameIdRef.current = null;
+    }
+    closeAudioContext();
+
+    setIsListening(false);
+  };
+
+  /* Navigating away mid-take ends neither path above: the recorder keeps
+     running, the microphone tracks stay live, the silence monitor keeps
+     scheduling frames, and the audio graph outlives the page that opened it.
+     Refs only, so the empty dependency list holds no stale closure. */
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+
+      if (autoSendTimerRef.current) {
+        clearTimeout(autoSendTimerRef.current);
+        autoSendTimerRef.current = null;
       }
-      audioStreamRef.current?.getTracks().forEach((track) => track.stop());
-      audioStreamRef.current = null;
+
+      abortedRef.current = true;
+      audioChunksRef.current = [];
+
+      const recorder = mediaRecorderRef.current;
+      if (recorder && recorder.state !== 'inactive') {
+        recorder.stop();
+      }
       mediaRecorderRef.current = null;
-      recordingSourceRef.current = null;
-    },
-    [],
-  );
+
+      audioStream.current?.getTracks().forEach((track) => track.stop());
+      audioStream.current = null;
+
+      if (animationFrameIdRef.current !== null) {
+        window.cancelAnimationFrame(animationFrameIdRef.current);
+        animationFrameIdRef.current = null;
+      }
+
+      const context = audioContextRef.current;
+      audioContextRef.current = null;
+      if (context != null && context.state !== 'closed') {
+        void context.close().catch(() => undefined);
+      }
+    };
+  }, []);
 
   return {
-    isListening: recordingSource === 'microphone',
-    isLoading: requestingSource === 'microphone' || finalizingSource === 'microphone',
-    externalStartRecording: () => startRecording('microphone'),
-    externalStopRecording: () => stopRecording('microphone'),
-    isBrowserAudioListening: recordingSource === 'browser',
-    isBrowserAudioLoading: requestingSource === 'browser' || finalizingSource === 'browser',
-    startBrowserAudioRecording: () => startRecording('browser'),
-    stopBrowserAudioRecording: () => stopRecording('browser'),
-    browserCaptureDevices,
-    selectedBrowserCaptureDeviceId,
-    loadBrowserCaptureDevices,
-    selectBrowserCaptureDevice,
+    isListening,
+    externalStopRecording,
+    externalAbortRecording,
+    externalStartRecording,
+    isLoading: isProcessing,
   };
 };
 

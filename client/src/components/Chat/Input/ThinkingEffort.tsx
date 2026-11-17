@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo } from 'react';
 import * as Ariakit from '@ariakit/react';
-import { TooltipAnchor } from '@librechat/client';
 import { Brain, Check, ChevronDown } from 'lucide-react';
+import { TooltipAnchor, disabledInkClasses } from '@librechat/client';
 import {
   isAgentsEndpoint,
   findActiveModelSpec,
@@ -11,6 +11,7 @@ import {
   resolveMetadataEffortConfig,
 } from 'librechat-data-provider';
 import type { EffortValue } from 'librechat-data-provider';
+import type { ReactNode } from 'react';
 import type { TranslationKeys } from '~/hooks';
 import { useGetStartupConfig, useGetEndpointsQuery, useTokenConfigQuery } from '~/data-provider';
 import { useSetIndexOptions, useLocalize } from '~/hooks';
@@ -28,14 +29,11 @@ const effortLabelKeys: Record<EffortValue, TranslationKeys> = {
   xhigh: 'com_ui_thinking_effort_xhigh',
 };
 
-const TRIGGER_CLASS =
-  'flex h-theme-control shrink-0 items-center gap-1 rounded-theme-control-round px-2 text-sm text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-text-primary aria-disabled:cursor-not-allowed aria-disabled:opacity-50';
-const MENU_CLASS =
-  'z-[200] min-w-[9rem] rounded-xl border border-border-light bg-surface-secondary p-1.5 text-text-primary shadow-lg outline-none';
 const MENU_ITEM_CLASS =
   'flex w-full cursor-pointer items-center justify-between gap-3 rounded-lg px-2 py-1.5 text-sm text-text-primary data-[active-item]:bg-surface-tertiary';
 
-function ThinkingEffortSelector() {
+/** `fallback` renders when no spec `effortSelector` or catalog effort applies (upstream's control). */
+function ThinkingEffortSelector({ fallback = null }: { fallback?: ReactNode }) {
   const localize = useLocalize();
   const { data: startupConfig } = useGetStartupConfig();
   const { data: endpointsConfig } = useGetEndpointsQuery();
@@ -85,7 +83,7 @@ function ThinkingEffortSelector() {
   }, [field, selectedValue, storedValue, setOption]);
 
   if (resolved == null || startupConfig?.interface?.parameters === false) {
-    return null;
+    return <>{fallback}</>;
   }
 
   const label = localize(
@@ -107,7 +105,10 @@ function ThinkingEffortSelector() {
             data-testid="thinking-effort"
             aria-label={controlLabel}
             disabled={isSubmitting}
-            className={cn(TRIGGER_CLASS)}
+            className={cn(
+              'h-theme-control rounded-theme-control-round text-text-secondary hover:bg-surface-hover hover:text-text-primary focus-visible:ring-text-primary flex shrink-0 items-center gap-1 px-2 text-sm transition-colors focus-visible:ring-2 focus-visible:outline-none aria-disabled:cursor-not-allowed aria-disabled:opacity-50',
+              disabledInkClasses,
+            )}
           >
             <Brain className="size-4 shrink-0" aria-hidden="true" />
             <span className="truncate">{label}</span>
@@ -115,7 +116,13 @@ function ThinkingEffortSelector() {
           </Ariakit.MenuButton>
         }
       />
-      <Ariakit.Menu store={menu} portal gutter={6} aria-label={controlLabel} className={MENU_CLASS}>
+      <Ariakit.Menu
+        store={menu}
+        portal
+        gutter={6}
+        aria-label={controlLabel}
+        className="rounded-theme-menu-panel border-border-light bg-surface-secondary text-text-primary z-[200] min-w-[9rem] border p-1.5 shadow-lg outline-none"
+      >
         {resolved.options.map((option) => (
           <Ariakit.MenuItem
             key={option}
