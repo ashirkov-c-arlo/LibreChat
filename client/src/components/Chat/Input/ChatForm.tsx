@@ -868,7 +868,7 @@ const ChatForm = memo(function ChatForm({
       <BadgeRowProvider
         conversationId={conversationId}
         specName={conversation?.spec}
-        endpoint={endpoint}
+        endpoint={conversation?.endpoint}
         isSubmitting={isSubmitting}
         observeToolAuthorization={showTools}
       >

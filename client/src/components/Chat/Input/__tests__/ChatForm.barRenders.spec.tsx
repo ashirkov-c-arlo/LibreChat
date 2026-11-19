@@ -9,8 +9,8 @@ import { useForm } from 'react-hook-form';
 import userEvent from '@testing-library/user-event';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { BrowserRouter as Router } from 'react-router-dom';
-import { QueryKeys, EModelEndpoint } from 'librechat-data-provider';
 import { act, render, screen, waitFor } from '@testing-library/react';
+import { QueryKeys, EModelEndpoint, LocalStorageKeys } from 'librechat-data-provider';
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { TFile, TMessage, TConversation } from 'librechat-data-provider';
 import type { TOptions } from 'i18next';
@@ -127,7 +127,17 @@ function HistoryProbe() {
   return null;
 }
 
-function Harness({ conversationId }: { conversationId: string }) {
+function Harness({
+  conversationId,
+  endpoint = EModelEndpoint.openAI,
+  endpointType,
+  model = 'gpt-4o',
+}: {
+  conversationId: string;
+  endpoint?: string;
+  endpointType?: EModelEndpoint;
+  model?: string;
+}) {
   const queryClient = useQueryClient();
   const messageCache = useMemo(() => createMessageCache(queryClient), [queryClient]);
   const [files, setFiles] = useAtom(filesFamily(0));
@@ -138,11 +148,12 @@ function Harness({ conversationId }: { conversationId: string }) {
     () =>
       ({
         conversationId,
-        endpoint: EModelEndpoint.openAI,
-        model: 'gpt-4o',
+        endpoint,
+        endpointType,
+        model,
         title: 'New Chat',
       }) as TConversation,
-    [conversationId],
+    [conversationId, endpoint, endpointType, model],
   );
 
   const chatHelpers = useMemo(
@@ -208,14 +219,29 @@ function Harness({ conversationId }: { conversationId: string }) {
 function renderComposer({
   conversationId = 'new',
   submitting = false,
-}: { conversationId?: string; submitting?: boolean } = {}) {
+  endpoint,
+  endpointType,
+  model,
+}: Partial<React.ComponentProps<typeof Harness>> & { submitting?: boolean } = {}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity }, mutations: { retry: false } },
   });
   queryClient.setQueryData(startupConfigKey(true), startupConfig);
   queryClient.setQueryData(startupConfigKey(false), startupConfig);
   queryClient.setQueryData<TFile[]>([QueryKeys.files], []);
-  queryClient.setQueryData([QueryKeys.endpoints], { [EModelEndpoint.openAI]: { order: 0 } });
+  queryClient.setQueryData([QueryKeys.endpoints], {
+    [EModelEndpoint.openAI]: { order: 0 },
+    LiteLLM: {
+      type: EModelEndpoint.custom,
+      chatDefaults: {
+        reasoningEffort: 'medium',
+        webSearch: true,
+        executeCode: true,
+        memory: true,
+        askUserQuestion: true,
+      },
+    },
+  });
   getDefaultStore().set(isSubmittingFamily(0), submitting);
 
   const view = render(
@@ -227,7 +253,12 @@ function renderComposer({
             <AuthContextProvider authConfig={{ loginRedirect: '', test: true }}>
               <DndProvider backend={HTML5Backend}>
                 <main>
-                  <Harness conversationId={conversationId} />
+                  <Harness
+                    conversationId={conversationId}
+                    endpoint={endpoint}
+                    endpointType={endpointType}
+                    model={model}
+                  />
                 </main>
               </DndProvider>
             </AuthContextProvider>
@@ -266,6 +297,25 @@ afterEach(() => {
 });
 
 describe('ChatForm action bar', () => {
+  test.each(['GPT 6 Luna', 'another-model'])(
+    'applies custom endpoint tool defaults for %s through the real composer',
+    async (model) => {
+      renderComposer({ endpoint: 'LiteLLM', endpointType: EModelEndpoint.custom, model });
+      await screen.findByTestId('text-input');
+
+      await waitFor(() => {
+        for (const prefix of [
+          LocalStorageKeys.LAST_WEB_SEARCH_TOGGLE_,
+          LocalStorageKeys.LAST_CODE_TOGGLE_,
+          LocalStorageKeys.LAST_MEMORY_TOGGLE_,
+        ]) {
+          expect(localStorage.getItem(`${prefix}new`)).toBe('true');
+        }
+      });
+    },
+    20000,
+  );
+
   test.each([
     { name: 'a new chat', conversationId: 'new', submitting: false },
     { name: 'a saved chat', conversationId: 'saved-chat', submitting: false },
