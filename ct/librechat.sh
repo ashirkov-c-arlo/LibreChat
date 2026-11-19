@@ -83,6 +83,14 @@ function update_script() {
 
     msg_info "Updating RAG API Dependencies"
     cd /opt/rag-api
+    # CLEAN_INSTALL wipes the gitignored .venv, and requirements.lite.txt pins
+    # pandas==2.2.1/psycopg2-binary==2.9.9 with no cp313 wheels on Debian 13,
+    # so rebuild the venv on Python 3.12 every update.
+    if ! command -v uv >/dev/null; then
+      curl -fsSL https://astral.sh/uv/install.sh | sh >/dev/null 2>&1
+      export PATH="$HOME/.local/bin:$PATH"
+    fi
+    $STD uv venv --python 3.12 --seed .venv
     $STD .venv/bin/pip install -r requirements.lite.txt
     msg_ok "Updated RAG API Dependencies"
 
