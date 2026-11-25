@@ -2,6 +2,13 @@
 export const BROWSER_CAPTURE_PREFIX = 'librechat_';
 export const BROWSER_CAPTURE_DEVICE_KEY = 'librechatBrowserCaptureDeviceId';
 
+export type CaptureSource = 'browser' | 'externalApp';
+export const CAPTURE_SHORTCUT_EVENT = 'librechat:capture-shortcut';
+export const captureSourceLabels = {
+  browser: 'com_ui_audio_browser_capture',
+  externalApp: 'com_ui_audio_external_app_capture',
+} as const satisfies Record<CaptureSource, string>;
+
 export type BrowserCaptureDevice = { deviceId: string; label: string };
 type AudioInputDevice = Pick<MediaDeviceInfo, 'deviceId' | 'kind' | 'label'>;
 
@@ -9,6 +16,16 @@ const normalizeDeviceLabel = (label: string) => label.toLowerCase().replace(/[^a
 
 export const matchesBrowserCaptureDevice = (label: string) =>
   normalizeDeviceLabel(label).startsWith(BROWSER_CAPTURE_PREFIX);
+
+export function getCaptureSource(label: string): CaptureSource | undefined {
+  const normalized = normalizeDeviceLabel(label);
+  if (/^librechat_browser(?:_|$)/.test(normalized)) {
+    return 'browser';
+  }
+  if (/^librechat_(?:external_app|zoom)(?:_|$)/.test(normalized)) {
+    return 'externalApp';
+  }
+}
 
 const isLibreChatCaptureDevice = (label: string) =>
   normalizeDeviceLabel(label).includes(BROWSER_CAPTURE_PREFIX);

@@ -1,10 +1,15 @@
 import { useRef, useMemo, useState, useEffect, useCallback } from 'react';
 import { useRecoilValue } from 'recoil';
 import { useToastContext } from '@librechat/client';
-import type { BrowserCaptureDevice } from './capture';
+import type { BrowserCaptureDevice, CaptureSource } from './capture';
 import type { useChatFormContext } from '~/Providers';
 import type { TAskFunction } from '~/common';
-import { BROWSER_CAPTURE_DEVICE_KEY, matchesBrowserCaptureDevice } from './capture';
+import {
+  BROWSER_CAPTURE_DEVICE_KEY,
+  captureSourceLabels,
+  getCaptureSource,
+  matchesBrowserCaptureDevice,
+} from './capture';
 import { getBestSupportedMimeType } from './useSpeechToTextExternal';
 import { useSpeechToTextMutation } from '~/data-provider';
 import useLocalize from '../useLocalize';
@@ -13,6 +18,11 @@ import store from '~/store';
 
 type Status = 'idle' | 'requesting' | 'recording' | 'finalizing' | 'transcribing';
 
+const capturePromptKeys = {
+  browser: 'com_ui_audio_capture_select_browser',
+  externalApp: 'com_ui_audio_capture_select_external_app',
+} as const;
+
 export interface BrowserAudio {
   /** A capture is being opened, recorded or transcribed; the microphone stays off meanwhile. */
   busy: boolean;
@@ -20,7 +30,7 @@ export interface BrowserAudio {
   loading: boolean;
   devices: BrowserCaptureDevice[];
   selectedDeviceId: string | null;
-  start: () => void;
+  start: (source?: CaptureSource) => void;
   stop: () => void;
   loadDevices: () => Promise<void>;
   selectDevice: (deviceId: string) => Promise<void>;
@@ -110,11 +120,20 @@ export default function useBrowserAudio({
   };
 
   const handleCaptureError = useCallback(
-    (error: unknown) => {
+    (error: unknown, source?: CaptureSource) => {
       const err = error instanceof Error ? error : new Error(String(error));
       if (isMissingDeviceError(err)) {
-        localStorage.removeItem(BROWSER_CAPTURE_DEVICE_KEY);
-        showToast({ message: localize('com_ui_browser_audio_unavailable'), status: 'error' });
+        if (source == null) {
+          localStorage.removeItem(BROWSER_CAPTURE_DEVICE_KEY);
+        }
+        showToast({
+          message: source
+            ? localize('com_ui_audio_capture_source_unavailable', {
+                0: localize(captureSourceLabels[source]),
+              })
+            : localize('com_ui_browser_audio_unavailable'),
+          status: 'error',
+        });
         return;
       }
       if (err.name === 'NotAllowedError' || err.name === 'SecurityError') {
@@ -126,19 +145,11 @@ export default function useBrowserAudio({
     [localize, showToast],
   );
 
-  const saveDevice = (stream: MediaStream) => {
-    const deviceId = stream.getAudioTracks()[0]?.getSettings().deviceId;
-    if (deviceId) {
-      localStorage.setItem(BROWSER_CAPTURE_DEVICE_KEY, deviceId);
-    }
-    return stream;
-  };
-
-  const getCaptureStream = async () => {
+  const getCaptureStream = async (source?: CaptureSource) => {
     const savedDeviceId = readStoredDeviceId();
-    if (savedDeviceId) {
+    if (source == null && savedDeviceId) {
       try {
-        return saveDevice(await requestCaptureStream(savedDeviceId));
+        return await requestCaptureStream(savedDeviceId);
       } catch (error) {
         if (!(error instanceof Error) || !isMissingDeviceError(error)) {
           throw error;
@@ -147,26 +158,31 @@ export default function useBrowserAudio({
       }
     }
 
+    const matchesSource = (label: string) =>
+      source == null ? matchesBrowserCaptureDevice(label) : getCaptureSource(label) === source;
     const inputs = (await navigator.mediaDevices.enumerateDevices()).filter(
       (device) => device.kind === 'audioinput',
     );
-    const captureDevice = inputs.find((device) => matchesBrowserCaptureDevice(device.label));
+    const captureDevice = inputs.find((device) => matchesSource(device.label));
     if (captureDevice) {
-      return saveDevice(await requestCaptureStream(captureDevice.deviceId));
+      return requestCaptureStream(captureDevice.deviceId);
     }
     if (inputs.some((device) => device.label !== '')) {
-      throw new DOMException('Browser capture device not found', 'NotFoundError');
+      throw new DOMException('Capture device not found', 'NotFoundError');
     }
 
-    /* Labels stay hidden until access is granted, so let the user pick the device in the prompt. */
-    showToast({ message: localize('com_ui_browser_audio_select_device'), status: 'info' });
+    /* Labels stay hidden until access is granted. Verify the input selected in the prompt. */
+    showToast({
+      message: localize(source ? capturePromptKeys[source] : 'com_ui_browser_audio_select_device'),
+      status: 'info',
+    });
     const stream = await requestCaptureStream();
-    const track = stream.getAudioTracks()[0];
-    if (track?.label && !matchesBrowserCaptureDevice(track.label)) {
-      stream.getTracks().forEach((item) => item.stop());
-      throw new DOMException('Browser capture device not selected', 'NotFoundError');
+    const label = stream.getAudioTracks()[0]?.label ?? '';
+    if ((source != null || label) && !matchesSource(label)) {
+      stream.getTracks().forEach((track) => track.stop());
+      throw new DOMException('Capture device not selected', 'NotFoundError');
     }
-    return saveDevice(stream);
+    return stream;
   };
 
   const submitTranscript = (text: string) => {
@@ -236,7 +252,7 @@ export default function useBrowserAudio({
     recorder.stop();
   }, [updateStatus]);
 
-  const start = async () => {
+  const start = async (source?: CaptureSource) => {
     if (statusRef.current !== 'idle') {
       return;
     }
@@ -247,7 +263,7 @@ export default function useBrowserAudio({
     existingTextRef.current = getValues('text') || '';
     updateStatus('requesting');
     try {
-      const stream = await getCaptureStream();
+      const stream = await getCaptureStream(source);
       if (!mountedRef.current) {
         stream.getTracks().forEach((track) => track.stop());
         return;
@@ -299,12 +315,17 @@ export default function useBrowserAudio({
         },
         { once: true },
       );
+      const deviceId = stream.getAudioTracks()[0]?.getSettings().deviceId;
+      if (deviceId) {
+        localStorage.setItem(BROWSER_CAPTURE_DEVICE_KEY, deviceId);
+        setSelectedDeviceId(deviceId);
+      }
       recorder.start(100);
       updateStatus('recording');
     } catch (error) {
       releaseStream();
       updateStatus('idle');
-      handleCaptureError(error);
+      handleCaptureError(error, source);
     }
   };
 
@@ -389,7 +410,7 @@ export default function useBrowserAudio({
   /* `start` reads refs only, so a stable wrapper keeps `memo(Bar)` from re-rendering. */
   const startRef = useRef(start);
   startRef.current = start;
-  const startStable = useCallback(() => void startRef.current(), []);
+  const startStable = useCallback((source?: CaptureSource) => void startRef.current(source), []);
 
   return useMemo(
     () => ({

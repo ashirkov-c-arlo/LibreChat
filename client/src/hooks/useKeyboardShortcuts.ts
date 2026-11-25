@@ -16,7 +16,9 @@ import {
   getFocusedChatPane,
 } from '@librechat/chat';
 import type { ShortcutBinding } from '@librechat/chat';
+import type { CaptureSource } from '~/hooks/Input/capture';
 import type { ShortcutOverride } from '~/store/misc';
+import { CAPTURE_SHORTCUT_EVENT, captureSourceLabels } from '~/hooks/Input/capture';
 import { useArchiveConvoMutation, useGetStartupConfig } from '~/data-provider';
 import { mainTextareaId, NotificationSeverity } from '~/common';
 import useSidebarToggle from '~/hooks/Nav/useSidebarToggle';
@@ -116,6 +118,30 @@ export const shortcutDefinitions = {
     displayOther: 'Ctrl+Shift+X',
     ariaMac: 'Meta+Shift+X',
     ariaOther: 'Control+Shift+X',
+  },
+  toggleMicrophone: {
+    labelKey: 'com_shortcut_toggle_microphone',
+    groupKey: 'com_shortcut_group_chat',
+    displayMac: '⌥ ⇧ L',
+    displayOther: 'Alt+Shift+L',
+    ariaMac: 'Alt+Shift+L',
+    ariaOther: 'Alt+Shift+L',
+  },
+  captureBrowserAudio: {
+    labelKey: captureSourceLabels.browser,
+    groupKey: 'com_shortcut_group_chat',
+    displayMac: '⌥ ⇧ B',
+    displayOther: 'Alt+Shift+B',
+    ariaMac: 'Alt+Shift+B',
+    ariaOther: 'Alt+Shift+B',
+  },
+  captureExternalAppAudio: {
+    labelKey: captureSourceLabels.externalApp,
+    groupKey: 'com_shortcut_group_chat',
+    displayMac: '⌥ ⇧ A',
+    displayOther: 'Alt+Shift+A',
+    ariaMac: 'Alt+Shift+A',
+    ariaOther: 'Alt+Shift+A',
   },
   escalateSteer: {
     labelKey: 'com_ui_interrupt_steer_now',
@@ -289,6 +315,12 @@ export const shortcutDefinitions = {
 
 export type ShortcutActionId = keyof typeof shortcutDefinitions;
 
+const audioShortcuts = new Set<ShortcutActionId>([
+  'toggleMicrophone',
+  'captureBrowserAudio',
+  'captureExternalAppAudio',
+]);
+
 /**
  * Shortcuts the window-level handler still runs while an input, textarea, or
  * contenteditable has focus. The composer yields chords bound to these by
@@ -302,6 +334,7 @@ export const EDITING_ALLOWED_SHORTCUTS: ReadonlySet<ShortcutActionId> = new Set(
   'submitMessage',
   'escalateSteer',
   'uploadFile',
+  ...audioShortcuts,
   /* The composer keeps focus across a send, so this is where a user reads the
      hint naming it and where they press it. Filtering it out as an editing
      chord made the one shortcut the composer advertises the one that did
@@ -422,6 +455,29 @@ function lastTurn(selector: string): Element | null {
   const turn = turns.length > 0 ? turns[turns.length - 1] : null;
   reachRow(turn?.closest('.message-render'));
   return turn;
+}
+
+function activateAudioControl(source?: CaptureSource): boolean {
+  const pane = getFocusedChatPane() ?? document.querySelector('[data-chat-pane="0"]');
+  const selector =
+    source == null
+      ? '[data-composer-shortcut="toggleMicrophone"]'
+      : '[data-testid="browser-audio-recorder"]';
+  const button = pane?.querySelector<HTMLButtonElement>(selector);
+  if (
+    button == null ||
+    isUnavailableElement(button) ||
+    button.closest('[inert], [aria-hidden="true"]') != null ||
+    !isVisibleElement(button)
+  ) {
+    return false;
+  }
+  if (source == null) {
+    return clickTarget(button);
+  }
+  // The shared capture button needs the source as well as the toggle action.
+  button.dispatchEvent(new CustomEvent<CaptureSource>(CAPTURE_SHORTCUT_EVENT, { detail: source }));
+  return true;
 }
 
 function clickLastElement(selector: string): boolean {
@@ -900,6 +956,9 @@ export function useShortcutActions(): ShortcutAction[] {
       focusSearch: handleFocusSearch,
       openSettings: handleOpenSettings,
       stopGenerating: handleStopGenerating,
+      toggleMicrophone: () => activateAudioControl(),
+      captureBrowserAudio: () => activateAudioControl('browser'),
+      captureExternalAppAudio: () => activateAudioControl('externalApp'),
       escalateSteer: handleEscalateSteer,
       regenerateResponse: handleRegenerateResponse,
       editLastMessage: handleEditLastMessage,
@@ -1121,8 +1180,20 @@ export default function useKeyboardShortcuts() {
         return;
       }
 
-      const matchedId = bindingMap.get(bindingHash(binding));
-      if (!matchedId) {
+      let matchedId = bindingMap.get(bindingHash(binding));
+      if (!matchedId && binding.alt && binding.shift && /^Key[A-Z]$/.test(e.code)) {
+        // Option on macOS and non-Latin layouts can change the character of a default audio key.
+        const physicalBinding = { ...binding, key: e.code.slice(3) };
+        const physicalId = bindingMap.get(bindingHash(physicalBinding));
+        if (
+          physicalId &&
+          audioShortcuts.has(physicalId) &&
+          bindingToString(physicalBinding) === defaultAria(physicalId)
+        ) {
+          matchedId = physicalId;
+        }
+      }
+      if (!matchedId || (e.isComposing && audioShortcuts.has(matchedId))) {
         return;
       }
 

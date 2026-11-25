@@ -568,8 +568,6 @@ const ChatForm = memo(function ChatForm({
     /* One capture at a time: the microphone stays off while browser audio runs. */
     disabled: speechDisabled || browserAudio.busy,
     autoSendText,
-    speechToText: SpeechToText,
-    index,
   });
   /** The waveform stands in for the placeholder until words arrive, and is
    *  then the only thing drawn on that line. */

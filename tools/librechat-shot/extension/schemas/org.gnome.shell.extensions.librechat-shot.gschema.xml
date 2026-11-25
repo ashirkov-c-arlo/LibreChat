@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.librechat-shot" path="/org/gnome/shell/extensions/librechat-shot/">
+    <key name="librechat-shot-window" type="as">
+      <default>['&lt;Super&gt;&lt;Alt&gt;d']</default>
+      <summary>Capture the focused window</summary>
+    </key>
+    <key name="librechat-shot-microphone" type="as">
+      <default>['&lt;Super&gt;&lt;Alt&gt;e']</default>
+      <summary>Start or stop microphone recording</summary>
+    </key>
+    <key name="librechat-shot-browser" type="as">
+      <default>['&lt;Super&gt;&lt;Alt&gt;q']</default>
+      <summary>Start or stop browser audio recording</summary>
+    </key>
+    <key name="librechat-shot-external-app" type="as">
+      <default>['&lt;Super&gt;&lt;Alt&gt;w']</default>
+      <summary>Start or stop external app audio recording</summary>
+    </key>
+  </schema>
+</schemalist>

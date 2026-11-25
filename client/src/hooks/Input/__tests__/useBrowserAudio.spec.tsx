@@ -119,6 +119,65 @@ describe('useBrowserAudio', () => {
     expect(ask).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['browser', 'LibreChat_Browser_Capture'],
+    ['externalApp', 'LibreChat_External_App_Capture'],
+    ['externalApp', 'LibreChat Zoom Capture'],
+  ] as const)('records the %s source with the label %s', async (source, label) => {
+    mockEnumerate.mockResolvedValue([
+      { kind: 'audioinput', deviceId: 'previous', label: 'librechat_other' },
+      { kind: 'audioinput', deviceId: 'target', label },
+    ]);
+    const capture = track(label, 'target');
+    mockGetUserMedia.mockResolvedValue({
+      getTracks: () => [capture],
+      getAudioTracks: () => [capture],
+    });
+    localStorage.setItem(BROWSER_CAPTURE_DEVICE_KEY, 'previous');
+    const { result } = setup();
+
+    await act(async () => result.current.start(source));
+
+    expect(mockGetUserMedia).toHaveBeenCalledTimes(1);
+    expect(mockGetUserMedia).toHaveBeenCalledWith({
+      audio: expect.objectContaining({ deviceId: { exact: 'target' } }),
+      video: false,
+    });
+    expect(result.current.listening).toBe(true);
+    expect(result.current.selectedDeviceId).toBe('target');
+  });
+
+  it('does not record a different source when the requested source is missing', async () => {
+    localStorage.setItem(BROWSER_CAPTURE_DEVICE_KEY, 'cap-1');
+    const { result } = setup();
+
+    await act(async () => result.current.start('externalApp'));
+
+    expect(mockGetUserMedia).not.toHaveBeenCalled();
+    expect(result.current.busy).toBe(false);
+    expect(localStorage.getItem(BROWSER_CAPTURE_DEVICE_KEY)).toBe('cap-1');
+    expect(mockShowToast).toHaveBeenCalledWith({
+      message: 'com_ui_audio_capture_source_unavailable',
+      status: 'error',
+    });
+  });
+
+  it('releases a different capture source selected in the permission prompt', async () => {
+    mockEnumerate.mockResolvedValue([{ kind: 'audioinput', deviceId: '', label: '' }]);
+    const browser = track('LibreChat_Browser_Capture', 'browser');
+    mockGetUserMedia.mockResolvedValue({
+      getTracks: () => [browser],
+      getAudioTracks: () => [browser],
+    });
+    const { result } = setup();
+
+    await act(async () => result.current.start('externalApp'));
+
+    expect(browser.stop).toHaveBeenCalledTimes(1);
+    expect(FakeRecorder.instances).toHaveLength(0);
+    expect(result.current.busy).toBe(false);
+  });
+
   it('refuses a non-librechat device picked in the permission prompt', async () => {
     mockEnumerate.mockResolvedValue([{ kind: 'audioinput', deviceId: '', label: '' }]);
     const mic = track('Built-in Mic', 'mic');
@@ -147,6 +206,7 @@ describe('findPhysicalMicrophone', () => {
     const microphone = findPhysicalMicrophone([
       { kind: 'audioinput', deviceId: 'browser', label: 'LibreChat Browser Capture' },
       { kind: 'audioinput', deviceId: 'zoom', label: 'LibreChat Zoom Capture' },
+      { kind: 'audioinput', deviceId: 'app', label: 'LibreChat External App Capture' },
       { kind: 'audioinput', deviceId: 'microphone', label: 'Built-in Audio Analog Stereo' },
     ]);
     expect(microphone?.deviceId).toBe('microphone');

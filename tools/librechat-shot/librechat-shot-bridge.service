@@ -1,0 +1,11 @@
+[Unit]
+Description=LibreChat Shot loopback bridge
+
+[Service]
+ExecStart=%h/.local/share/librechat-shot/venv/bin/python %h/.local/share/librechat-shot/bridge.py %h/.config/librechat-shot/config.json
+Restart=on-failure
+UMask=0077
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target

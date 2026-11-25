@@ -7,8 +7,10 @@ import { useElementSize, useElementSizeSelect } from '@librechat/chat/react';
 import type { TConversation, EModelEndpoint, EndpointFileConfig } from 'librechat-data-provider';
 import type { BrowserAudio as BrowserAudioState } from '~/hooks/Input/useBrowserAudio';
 import type { PaletteEntry, PaletteMode } from '~/hooks/Input/usePaletteEntries';
+import type { ShortcutActionId } from '~/hooks/useKeyboardShortcuts';
 import type { Dictation } from '~/hooks/Input/useDictation';
 import type { ExtendedFile, FileSetter } from '~/common';
+import { useShortcutAriaKey, useShortcutHint } from '~/hooks/useKeyboardShortcuts';
 import usePaletteEntries from '~/hooks/Input/usePaletteEntries';
 import MCPConfigDialog from '~/components/MCP/MCPConfigDialog';
 import useToolFavorites from '~/hooks/Input/useToolFavorites';
@@ -83,6 +85,7 @@ interface RoundButtonProps {
   children: React.ReactNode;
   primary?: boolean;
   disabled?: boolean;
+  shortcut?: ShortcutActionId;
 }
 
 function RoundButton({
@@ -91,10 +94,13 @@ function RoundButton({
   children,
   primary = false,
   disabled = false,
+  shortcut,
 }: RoundButtonProps) {
+  const description = useShortcutHint(shortcut, label);
+  const ariaKey = useShortcutAriaKey(shortcut);
   return (
     <TooltipAnchor
-      description={label}
+      description={description}
       disabled={disabled}
       render={
         <IconButton
@@ -104,6 +110,8 @@ function RoundButton({
           variant={primary ? 'primary' : 'ghost'}
           onClick={onClick}
           disabled={disabled}
+          data-composer-shortcut={shortcut}
+          aria-keyshortcuts={disabled ? undefined : ariaKey}
         >
           {/* IconButton owns its own text color; this fills the button so the
               icon (currentColor) starts muted and brightens on hover, without
@@ -515,6 +523,7 @@ function Bar({
             <RoundButton
               label={dictating ? localize('com_ui_stop') : localize('com_ui_use_micrphone')}
               onClick={dictating ? dictation.stopToComposer : dictation.start}
+              shortcut="toggleMicrophone"
               /* Once the take is handed to the transcriber there is nothing left
                  to stop, and pressing either of these again would only rewrite
                  how a take that has already been committed gets spent. Cancel,
