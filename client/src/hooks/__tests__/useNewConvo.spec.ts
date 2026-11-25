@@ -178,7 +178,7 @@ jest.mock('@librechat/client', () => ({
 }));
 jest.mock('~/Providers/AgentsMapContext', () => ({ useAgentsMapContext: () => ({}) }));
 jest.mock('../Files/useDelayedUploadToast', () => ({
-  useDelayedUploadToast: () => ({ startUploadTimer: jest.fn(), clearUploadTimer: jest.fn() }),
+  useDelayedUploadToast: () => jest.fn(),
 }));
 jest.mock('../Files/useClientResize', () => ({
   __esModule: true,
@@ -2109,5 +2109,39 @@ describe('remembered New Chat identity', () => {
       },
     } as Partial<TStartupConfig>;
     expect((await open()).agent_id).toBe('agent_spec');
+  });
+
+  describe('hard default spec without prioritize', () => {
+    beforeEach(() => {
+      mockStartup = {
+        interface: { modelSelect: true },
+        modelSpecs: {
+          prioritize: false,
+          list: [
+            {
+              name: 'general',
+              label: 'General',
+              default: true,
+              executeCode: true,
+              preset: { endpoint: EModelEndpoint.openAI, model: 'spec-model' },
+            },
+          ],
+        },
+      } as Partial<TStartupConfig>;
+    });
+
+    it('applies the default spec to a bare New Chat', async () => {
+      const selected = await open();
+      expect(selected.spec).toBe('general');
+      expect(selected.model).toBe('spec-model');
+    });
+
+    it('keeps an explicit template selection over the default spec', async () => {
+      const selected = await open(0, {
+        template: { endpoint: EModelEndpoint.openAI, model: 'explicit-model' },
+      });
+      expect(selected.spec).toBeFalsy();
+      expect(selected.model).toBe('explicit-model');
+    });
   });
 });

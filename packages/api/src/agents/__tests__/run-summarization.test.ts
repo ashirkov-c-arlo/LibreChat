@@ -24,8 +24,8 @@ import type { OpenAI } from 'openai';
 import type { ModelBoundChatModelCallback } from '~/middleware/modelBoundContent';
 import type { OpenAIConfiguration, AzureOptions } from '~/types';
 import { clearToolApprovalHooks, registerToolApprovalHook } from '~/agents/hitl/hooks';
-import { executionFixture } from '~/schedules/authorization/execution.helper';
 import { createRun, isAskUserQuestionAdminDisabled } from '~/agents/run';
+import { executionFixture } from '~/agents/authority/execution.helper';
 import { initializeOpenAI } from '~/endpoints/openai/initialize';
 import { createSecretRebindingGuard } from '~/app/rebinding';
 import { getOpenAIConfig } from '~/endpoints/openai/config';
@@ -3851,6 +3851,132 @@ describe('subagentConfigs', () => {
     expect(configs[0]).toMatchObject({ self: true, type: 'self' });
   });
 
+  it('lets self-spawn reuse the parent agent subagents', async () => {
+    const child = makeAgent({
+      id: 'agent_child',
+      name: 'Researcher',
+    });
+    const agents = await callAndCapture({
+      agents: [
+        makeAgent({
+          subagents: { enabled: true, agent_ids: ['agent_child'] },
+          subagentAgentConfigs: [child],
+        }),
+      ],
+    });
+
+    const configs = agents[0].subagentConfigs as Array<{
+      self?: boolean;
+      allowNested?: boolean;
+      agentInputs?: { subagentConfigs?: Array<{ type?: string }> };
+    }>;
+    const selfConfig = configs.find((config) => config.self);
+
+    expect(selfConfig?.allowNested).toBe(true);
+    expect(selfConfig?.agentInputs?.subagentConfigs).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: 'agent_child' })]),
+    );
+  });
+
+  it('hands the SDK a copy that can reach the subagents but not spawn another copy', async () => {
+    const agents = await callAndCapture({
+      agents: [
+        makeAgent({
+          subagents: { enabled: true, agent_ids: ['agent_child'] },
+          subagentAgentConfigs: [makeAgent({ id: 'agent_child', name: 'Researcher' })],
+        }),
+      ],
+    });
+    const configs = agents[0].subagentConfigs as SubagentConfig[];
+    const selfConfig = configs.find((config) => config.self === true);
+
+    expect(selfConfig?.description).toMatch(/The copy can delegate to the same subagents\.$/);
+    const copy = buildChildInputs(selfConfig as BuildChildInput, 'agent_1', MAX_SUBAGENT_DEPTH);
+    expect(copy.subagentConfigs?.map((config) => config.type)).toEqual(['agent_child']);
+    expect(copy.maxSubagentDepth).toBe(MAX_SUBAGENT_DEPTH - 1);
+  });
+
+  it('leaves the copy without subagents when subagentSelfNesting is off, and says so', async () => {
+    const agents = await callAndCapture({
+      agents: [
+        makeAgent({
+          subagents: { enabled: true, agent_ids: ['agent_child'] },
+          subagentAgentConfigs: [makeAgent({ id: 'agent_child', name: 'Researcher' })],
+        }),
+      ],
+      appConfig: { endpoints: { agents: { subagentSelfNesting: false } } } as AppConfig,
+    });
+    const configs = agents[0].subagentConfigs as SubagentConfig[];
+    const selfConfig = configs.find((config) => config.self === true);
+
+    expect(configs.map((config) => config.type)).toEqual(['self', 'agent_child']);
+    expect(selfConfig?.allowNested).toBeUndefined();
+    expect(selfConfig?.agentInputs).toBeUndefined();
+    expect(selfConfig?.description).toMatch(/The copy cannot delegate to subagents;/);
+  });
+
+  it('says nothing about delegation for a copy of an agent with no subagents', async () => {
+    const agents = await callAndCapture({
+      agents: [makeAgent({ subagents: { enabled: true } })],
+    });
+    const [selfConfig] = agents[0].subagentConfigs as SubagentConfig[];
+
+    expect(selfConfig.allowNested).toBeUndefined();
+    expect(selfConfig.description).not.toMatch(/delegate/);
+  });
+
+  it('promises a copy subagents only where every path to it leaves a hop to spend', async () => {
+    const root = makeSubagentChain(MAX_SUBAGENT_DEPTH);
+    const chain: TestRunAgent[] = [root];
+    while (chain[chain.length - 1].subagentAgentConfigs?.[0] != null) {
+      chain.push(chain[chain.length - 1].subagentAgentConfigs![0]);
+    }
+    for (const agent of chain.slice(0, -1)) {
+      (agent.subagents as { allowSelf: boolean }).allowSelf = true;
+    }
+    const agents = await callAndCapture({ agents: [root] });
+
+    /** `levels[n]` holds the self entry and the saved child of the agent `n` hops below the root. */
+    const levels: { copy: SubagentConfig; child: SubagentConfig }[] = [];
+    let configs = agents[0].subagentConfigs as SubagentConfig[] | undefined;
+    while (configs != null) {
+      const copy = configs.find((config) => config.self === true);
+      const child = configs.find((config) => config.self !== true);
+      if (copy == null || child == null) {
+        break;
+      }
+      levels.push({ copy, child });
+      configs = child.agentInputs?.subagentConfigs as SubagentConfig[] | undefined;
+    }
+
+    expect(levels).toHaveLength(MAX_SUBAGENT_DEPTH);
+    expect(levels.map(({ copy }) => copy.allowNested === true)).toEqual(
+      levels.map((_, depth) => 2 * depth + 1 < MAX_SUBAGENT_DEPTH),
+    );
+    for (const { copy } of levels) {
+      expect(copy.description).toMatch(
+        copy.allowNested === true
+          ? /The copy can delegate to the same subagents\.$/
+          : /The copy cannot delegate to subagents;/,
+      );
+    }
+
+    /**
+     * The longest path to each agent goes through the copy of every agent above that has one to
+     * give. Counted down by the SDK itself, a promised copy still has a hop left at the end.
+     */
+    const spend = (config: SubagentConfig, hops: number): number =>
+      buildChildInputs(config as BuildChildInput, 'agent_chain', hops).maxSubagentDepth ?? 0;
+    let hops: number = MAX_SUBAGENT_DEPTH;
+    for (const { copy, child } of levels) {
+      if (copy.allowNested === true) {
+        hops = spend(copy, hops);
+        expect(hops).toBeGreaterThan(0);
+      }
+      hops = spend(child, hops);
+    }
+  });
+
   it('omits self-spawn when allowSelf is false', async () => {
     const agents = await callAndCapture({
       agents: [makeAgent({ subagents: { enabled: true, allowSelf: false } })],
@@ -4084,6 +4210,37 @@ describe('subagentConfigs', () => {
     ).toMatchObject({ defer_loading: false });
     expect(memberRegistry.get('deep_tool')).toMatchObject({ defer_loading: true });
     expect(memberInput.toolDefinitions).toEqual([{ name: 'tool_search' }]);
+  });
+
+  it('advertises graph teams without enabling ordinary self-spawn or explicit agents', async () => {
+    const member = makeAgent({ id: 'graph_only_member' });
+    const definition = {
+      type: 'graph_only',
+      name: 'Graph only',
+      description: 'Delegate a team',
+      agent_ids: [member.id],
+      edges: [],
+      entry_agent_id: member.id,
+      result_agent_id: member.id,
+    };
+    const agents = await callAndCapture({
+      agents: [
+        makeAgent({
+          id: 'parent',
+          subagents: {
+            enabled: false,
+            graphsEnabled: true,
+            allowSelf: true,
+            agent_ids: ['unused'],
+            graphs: [definition],
+          },
+          subagentGraphConfigs: [{ definition, memberConfigs: [member] }],
+        }),
+      ],
+    });
+    expect(agents[0].subagentConfigs).toHaveLength(1);
+    const configs = agents[0].subagentConfigs as Array<Record<string, unknown>>;
+    expect(configs[0]).toMatchObject({ kind: 'graph', type: 'graph_only' });
   });
 
   it('builds lazy graph inputs from initialized members instead of capability metadata', async () => {
@@ -5609,7 +5766,7 @@ describe('HITL wiring is gated on hitlCapable', () => {
       await createRun({
         agents: [agent] as never,
         signal: new AbortController().signal,
-        scheduledMCPExecution: f.execution,
+        grantExecution: f.execution,
         appConfig: {
           ...hitlAppConfig,
           endpoints: {
@@ -5671,7 +5828,7 @@ describe('HITL wiring is gated on hitlCapable', () => {
       await createRun({
         agents: [root] as never,
         signal: new AbortController().signal,
-        scheduledMCPExecution: execution,
+        grantExecution: execution,
         subagentTasks: tasks,
         appConfig: {
           ...hitlAppConfig,
@@ -5707,8 +5864,8 @@ describe('HITL wiring is gated on hitlCapable', () => {
       await createRun({
         agents: [makeAgent({ id: 'root' })] as never,
         signal: new AbortController().signal,
-        scheduledMCPExecution: f.execution,
-        recordScheduledMCPDenial: recorder,
+        grantExecution: f.execution,
+        recordGrantDenial: recorder,
         toolApprovalAllows: remembered ? ['write_action_api'] : undefined,
         appConfig: {
           ...hitlAppConfig,
@@ -5763,7 +5920,7 @@ describe('HITL wiring is gated on hitlCapable', () => {
     await createRun({
       agents: agents as never,
       signal: new AbortController().signal,
-      scheduledMCPExecution: f.execution,
+      grantExecution: f.execution,
       appConfig: {
         ...hitlAppConfig,
         endpoints: { agents: { toolApproval: { enabled: false } } },

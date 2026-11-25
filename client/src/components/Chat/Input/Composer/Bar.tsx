@@ -1,4 +1,4 @@
-import React, { memo, useMemo, useState, useCallback } from 'react';
+import React, { memo, useRef, useMemo, useState, useCallback } from 'react';
 import * as Ariakit from '@ariakit/react';
 import { ComposerChip as Chip } from '@librechat/chat/components';
 import { Mic, Plus, Check, Square, ChevronDown } from 'lucide-react';
@@ -9,6 +9,7 @@ import type { BrowserAudio as BrowserAudioState } from '~/hooks/Input/useBrowser
 import type { PaletteEntry, PaletteMode } from '~/hooks/Input/usePaletteEntries';
 import type { Dictation } from '~/hooks/Input/useDictation';
 import type { ExtendedFile, FileSetter } from '~/common';
+import { SERVERS_KEY, ServersChip, ServersCatalog, useServersEntry } from './Servers';
 import usePaletteEntries from '~/hooks/Input/usePaletteEntries';
 import MCPConfigDialog from '~/components/MCP/MCPConfigDialog';
 import useToolFavorites from '~/hooks/Input/useToolFavorites';
@@ -277,7 +278,19 @@ function Bar({
   /* Catalog skills are excluded: a picked skill is staged context for the next
      turn, so it belongs in the tray above the textarea with files and quotes.
      Built-in tool pins remain visible while off. */
-  const barEntries = useMemo(() => projectBarEntries(entries), [entries]);
+  const [serversOpen, setServersOpen] = useState(false);
+  const serversTriggerRef = useRef<HTMLButtonElement>(null);
+  const openServers = useCallback(() => setServersOpen(true), []);
+  const closeServers = useCallback(() => setServersOpen(false), []);
+  const serversEntry = useServersEntry(entries, openServers);
+  /* Closed with the chip, so a chip that comes back does not reopen the list. */
+  if (serversEntry == null && serversOpen) {
+    setServersOpen(false);
+  }
+  const barEntries = useMemo(() => {
+    const projected = projectBarEntries(entries);
+    return serversEntry != null ? [serversEntry, ...projected] : projected;
+  }, [entries, serversEntry]);
   /* Catalog order puts long skill and MCP names mid-row, stranding the rest of
      that row; packing widest-first fills the rows instead. */
   const { ordered: packedEntries, rootRef, widths } = useChipPacking(barEntries);
@@ -328,6 +341,9 @@ function Bar({
   const barClass = 'flex flex-col gap-1.5 px-2 pb-2';
 
   const renderChip = (entry: PaletteEntry) => {
+    if (entry.key === SERVERS_KEY) {
+      return <ServersChip key={entry.key} entry={entry} triggerRef={serversTriggerRef} />;
+    }
     const pinnedInactive = entry.pinned && !entry.active;
     const menuModes = chipMenuModes(entry.modes);
     const modeMenu = menuModes.length > 0 ? <ChipModes modes={menuModes} /> : null;
@@ -546,6 +562,14 @@ function Bar({
           )}
         </div>
       </div>
+      {serversEntry != null && (
+        <ServersCatalog
+          open={serversOpen}
+          onClose={closeServers}
+          entries={entries}
+          returnFocusRef={serversTriggerRef}
+        />
+      )}
       {mcpConfigProps && (
         <MCPConfigDialog
           {...mcpConfigProps}

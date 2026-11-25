@@ -3,7 +3,7 @@
  */
 import React from 'react';
 import { Tools, Constants } from 'librechat-data-provider';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { act, render, screen, waitFor, fireEvent } from '@testing-library/react';
 import type { ToolCallChrome } from '../../../react/host';
 import {
   LoneGroupContext,
@@ -15,6 +15,33 @@ import { translate } from '../../../__fixtures__/toolCallLocale';
 import { MessagePartsHostProvider } from '../../../react/host';
 import { ToolAuthWarningContext } from '../auth';
 import ToolCall from '../ToolCall';
+
+jest.mock('../ProgressText', () => ({
+  __esModule: true,
+  default: ({
+    onClick,
+    inProgressText,
+    finishedText,
+    subtitle,
+  }: {
+    onClick?: () => void;
+    inProgressText?: string;
+    finishedText?: string;
+    subtitle?: string;
+  }) => (
+    <div data-testid="progress-text" onClick={onClick}>
+      {finishedText || inProgressText}
+      {subtitle ? <span data-testid="subtitle">{subtitle}</span> : null}
+    </div>
+  ),
+}));
+
+jest.mock('../ToolCallInfo', () => ({
+  __esModule: true,
+  default: (props: { input: string; output?: string | null }) => (
+    <div data-testid="tool-call-info">{JSON.stringify(props)}</div>
+  ),
+}));
 
 jest.mock('@librechat/client', () => {
   const { translate: localize } = jest.requireActual(
@@ -41,29 +68,6 @@ function openUrl(url: string): void {
   link.remove();
 }
 
-function ProgressStub({
-  onClick,
-  inProgressText,
-  finishedText,
-  subtitle,
-}: {
-  onClick?: () => void;
-  inProgressText?: string;
-  finishedText?: string;
-  subtitle?: string;
-}) {
-  return (
-    <div data-testid="progress-text" onClick={onClick}>
-      {finishedText || inProgressText}
-      {subtitle ? <span data-testid="subtitle">{subtitle}</span> : null}
-    </div>
-  );
-}
-
-function InfoStub(props: { input: string; output?: string | null }) {
-  return <div data-testid="tool-call-info">{JSON.stringify(props)}</div>;
-}
-
 function AttachmentStub({ attachments }: { attachments?: unknown }) {
   return <div data-testid="attachment-group">{JSON.stringify(attachments)}</div>;
 }
@@ -76,9 +80,6 @@ const chrome: ToolCallChrome = {
   bindActionOAuth,
   openUrl,
   logError,
-  renderProgress: (props) => <ProgressStub {...props} />,
-  renderInfo: (props) => <InfoStub input={props.input} output={props.output} />,
-  renderIcon: () => null,
   renderAttachments: (attachments) => <AttachmentStub attachments={attachments} />,
 };
 
@@ -116,6 +117,61 @@ describe('ToolCall', () => {
     jest.clearAllMocks();
     bindMCPOAuth.mockResolvedValue({ success: true });
     bindActionOAuth.mockResolvedValue({ success: true });
+  });
+
+  describe('client tool handoff', () => {
+    it.each(['testFunction', `lookup${Constants.mcp_delimiter}server`, 'read_file'])(
+      'announces the caller handoff %s with its original name',
+      async (name) => {
+        await act(async () => {
+          renderWithRecoil(
+            <ToolCall
+              {...mockProps}
+              name={name}
+              clientToolCall
+              initialProgress={0.1}
+              isSubmitting={false}
+              output={undefined}
+            />,
+          );
+        });
+        expect(screen.getByTestId('progress-text')).toHaveTextContent(
+          `Requested ${name} from client`,
+        );
+        expect(screen.queryByText('Cancelled')).not.toBeInTheDocument();
+      },
+    );
+    it.each(['', 'client result'])(
+      'treats a received result %j as completed rather than a handoff',
+      async (output) => {
+        await act(async () => {
+          renderWithRecoil(
+            <ToolCall
+              {...mockProps}
+              clientToolCall
+              runStepStatus="completed"
+              isSubmitting={false}
+              output={output}
+            />,
+          );
+        });
+        expect(screen.getByTestId('progress-text')).toHaveTextContent('Completed testFunction');
+      },
+    );
+    it('keeps a genuinely cancelled client call cancelled', async () => {
+      await act(async () => {
+        renderWithRecoil(
+          <ToolCall
+            {...mockProps}
+            clientToolCall
+            runStepStatus="cancelled"
+            isSubmitting={false}
+            output={undefined}
+          />,
+        );
+      });
+      expect(screen.getByTestId('progress-text')).toHaveTextContent('Cancelled');
+    });
   });
 
   describe('tool preparation feedback', () => {

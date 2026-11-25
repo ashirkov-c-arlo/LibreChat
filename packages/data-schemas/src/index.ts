@@ -30,7 +30,27 @@ export type {
   SlackInstallGeneration,
 } from './models/slackWorkspace';
 export { createResponseStorage, sameResponseTerminalReceipt } from './methods/response';
-export { createAgentKeyMCPConsentStorage } from './methods/scheduleConsent';
+export {
+  createSubscriptionGrantStorage,
+  createAgentKeyMCPConsentStorage,
+  createScheduleMCPConsentStorage,
+} from './methods/runGrant';
+export { createTriggerRuns } from './methods/triggerRun';
+export type { TriggerRuns } from './methods/triggerRun';
+export { createConnections } from './methods/connection';
+export type {
+  Connections,
+  ConnectionRef,
+  ConnectionBound,
+  ConnectionBinding,
+} from './methods/connection';
+export { createSubscriptions } from './methods/subscription';
+export type {
+  Subscriptions,
+  SubscriptionDraft,
+  SubscriptionPatch,
+  SubscriptionWrite,
+} from './methods/subscription';
 export type {
   ResponseOwner,
   ResponseStorage,
@@ -116,6 +136,7 @@ export {
 export { FAVORITE_ITEM_TYPES } from './types/favorite';
 export {
   AGENT_EVENT_ACTOR_SUMMARY_VERSION,
+  MAX_EXCLUDED_FILES,
   MAX_AGENT_EVENT_ACTOR_DISCOVERED_TOOLS,
   MAX_AGENT_EVENT_ACTOR_ENCODING_LENGTH,
   MAX_AGENT_EVENT_ACTOR_SKILLS,
