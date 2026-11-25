@@ -1,0 +1,7 @@
+{
+  "uuid": "librechat-shot@local",
+  "name": "LibreChat Shot",
+  "description": "Capture the focused window and control LibreChat audio.",
+  "shell-version": ["51"],
+  "settings-schema": "org.gnome.shell.extensions.librechat-shot"
+}

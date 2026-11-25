@@ -1,4 +1,4 @@
-import { memo, useId, useMemo, useState, useCallback } from 'react';
+import { memo, useId, useRef, useMemo, useState, useEffect, useCallback } from 'react';
 import * as Ariakit from '@ariakit/react';
 import { AudioLines, Check, ChevronDown, createLucideIcon } from 'lucide-react';
 import {
@@ -9,7 +9,14 @@ import {
   disabledInkClasses,
 } from '@librechat/client';
 import type { BrowserAudio as BrowserAudioState } from '~/hooks/Input/useBrowserAudio';
+import type { CaptureSource } from '~/hooks/Input/capture';
 import type { MenuItemProps } from '~/common';
+import {
+  CAPTURE_SHORTCUT_EVENT,
+  captureSourceLabels,
+  getCaptureSource,
+} from '~/hooks/Input/capture';
+import { useShortcutAriaKey, useShortcutDisplay } from '~/hooks/useKeyboardShortcuts';
 import { useLocalize } from '~/hooks';
 import { cn } from '~/utils';
 
@@ -31,12 +38,44 @@ interface BrowserAudioProps {
   disabled: boolean;
 }
 
-/** Records a `librechat_` capture device (browser audio), with a picker for which one. */
+/** Records audio from a virtual capture device. */
 function BrowserAudio({ audio, disabled }: BrowserAudioProps) {
   const localize = useLocalize();
   const menuId = useId();
   const [menuOpen, setMenuOpen] = useState(false);
-  const { listening, loading, devices, selectedDeviceId, loadDevices, selectDevice } = audio;
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const { listening, loading, devices, selectedDeviceId, loadDevices, selectDevice, start, stop } =
+    audio;
+  const unavailable = loading || (!listening && disabled);
+  const browserDisplay = useShortcutDisplay('captureBrowserAudio');
+  const externalDisplay = useShortcutDisplay('captureExternalAppAudio');
+  const browserAriaKey = useShortcutAriaKey('captureBrowserAudio');
+  const externalAriaKey = useShortcutAriaKey('captureExternalAppAudio');
+  const ariaKey = [browserAriaKey, externalAriaKey].filter(Boolean).join(' ') || undefined;
+  const shortcuts = [browserDisplay, externalDisplay].filter(Boolean).join(' / ');
+
+  const toggle = useCallback(
+    (source?: CaptureSource) => {
+      if (!unavailable) {
+        if (listening) {
+          stop();
+        } else {
+          start(source);
+        }
+      }
+    },
+    [unavailable, listening, start, stop],
+  );
+
+  useEffect(() => {
+    const button = buttonRef.current;
+    if (button == null) {
+      return;
+    }
+    const onShortcut = (event: Event) => toggle((event as CustomEvent<CaptureSource>).detail);
+    button.addEventListener(CAPTURE_SHORTCUT_EVENT, onShortcut);
+    return () => button.removeEventListener(CAPTURE_SHORTCUT_EVENT, onShortcut);
+  }, [toggle]);
 
   const onMenuOpenChange = useCallback(
     (open: boolean) => {
@@ -61,10 +100,12 @@ function BrowserAudio({ audio, disabled }: BrowserAudioProps) {
     }
     return devices.map((device) => {
       const selected = selectedDeviceId === device.deviceId;
+      const source = getCaptureSource(device.label);
       return {
         id: device.deviceId,
-        label: device.label,
+        label: source === 'externalApp' ? localize(captureSourceLabels[source]) : device.label,
         ariaChecked: selected,
+        ariaRole: 'menuitemradio',
         icon: selected ? <Check className="size-4" aria-hidden="true" /> : undefined,
         onClick: () => void selectDevice(device.deviceId),
       };
@@ -82,16 +123,18 @@ function BrowserAudio({ audio, disabled }: BrowserAudioProps) {
   return (
     <div className="flex items-center">
       <TooltipAnchor
-        description={label}
+        description={shortcuts ? `${label} (${shortcuts})` : label}
         render={
           <IconButton
-            id="browser-audio-recorder"
+            ref={buttonRef}
+            data-testid="browser-audio-recorder"
             label={label}
             size="md"
             shape="composer"
             variant={listening ? 'destructive' : 'ghost'}
-            onClick={listening ? audio.stop : audio.start}
-            disabled={loading || (!listening && disabled)}
+            onClick={() => toggle()}
+            disabled={unavailable}
+            aria-keyshortcuts={unavailable ? undefined : ariaKey}
             aria-pressed={listening}
           >
             <span

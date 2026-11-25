@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { RecoilRoot, useRecoilValue } from 'recoil';
 import { bindingDisplayString, bindingToString } from '@librechat/chat';
@@ -20,6 +21,7 @@ import useKeyboardShortcuts, {
 } from './useKeyboardShortcuts';
 import { ReasoningControl } from '~/components/Chat/Input/Reasoning';
 import Thinking from '~/components/Chat/Input/Composer/Thinking';
+import Audio from '~/components/Chat/Input/Composer/Audio';
 import store from '~/store';
 
 /** `copy-to-clipboard` exports a single callable: `copy(text, options?)`. */
@@ -871,6 +873,118 @@ describe('upload file shortcut', () => {
     expect(dictating.onClick).not.toHaveBeenCalled();
     expect(other.onClick).not.toHaveBeenCalled();
     expect(event.defaultPrevented).toBe(false);
+  });
+});
+
+describe('audio shortcuts', () => {
+  const chord = (key: string, code?: string) => ({ key, code, altKey: true, shiftKey: true });
+
+  it('starts the requested capture source and stops it with the same key', () => {
+    const start = jest.fn();
+    const stop = jest.fn();
+    const selectDevice = jest.fn().mockResolvedValue(undefined);
+    function Capture() {
+      const [listening, setListening] = useState(false);
+      return (
+        <section data-chat-pane="0">
+          <textarea data-testid="draft" />
+          <Audio
+            disabled={false}
+            audio={{
+              listening,
+              busy: listening,
+              loading: false,
+              devices: [{ deviceId: 'legacy', label: 'LibreChat Zoom Capture' }],
+              selectedDeviceId: null,
+              start: (source) => {
+                start(source);
+                setListening(true);
+              },
+              stop: () => {
+                stop();
+                setListening(false);
+              },
+              loadDevices: async () => {},
+              selectDevice,
+            }}
+          />
+        </section>
+      );
+    }
+    renderHarness(undefined, '/c/test-convo', undefined, <Capture />);
+    const draft = screen.getByTestId('draft');
+    const recorder = screen.getByTestId('browser-audio-recorder');
+    expect(recorder).toHaveAttribute('aria-keyshortcuts', 'Alt+Shift+B Alt+Shift+A');
+    draft.focus();
+
+    expect(dispatchKey(chord('b'), draft).defaultPrevented).toBe(true);
+    expect(start).toHaveBeenLastCalledWith('browser');
+    expect(recorder).toHaveAttribute('aria-pressed', 'true');
+    dispatchKey(chord('b'), draft);
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(recorder).toHaveAttribute('aria-pressed', 'false');
+
+    dispatchKey(chord('ф', 'KeyA'), draft);
+    expect(start).toHaveBeenLastCalledWith('externalApp');
+    dispatchKey(chord('ф', 'KeyA'), draft);
+    expect(stop).toHaveBeenCalledTimes(2);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select audio capture device' }));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'LibreChat External App Capture' }));
+    expect(selectDevice).toHaveBeenCalledWith('legacy');
+  });
+
+  it('clicks only the focused microphone and ignores a held key or a disabled control', () => {
+    const main = jest.fn();
+    const secondary = jest.fn();
+    renderHarness(
+      undefined,
+      '/c/test-convo',
+      undefined,
+      <>
+        <section data-chat-pane="0">
+          <button data-composer-shortcut="toggleMicrophone" onClick={main} />
+        </section>
+        <section data-chat-pane="1">
+          <textarea data-testid="draft" />
+          <button data-composer-shortcut="toggleMicrophone" onClick={secondary} />
+        </section>
+      </>,
+    );
+    dispatchKey(chord('l'));
+    expect(main).toHaveBeenCalledTimes(1);
+    const draft = screen.getByTestId('draft');
+    draft.focus();
+    dispatchKey(chord('д', 'KeyL'), draft);
+    expect(secondary).toHaveBeenCalledTimes(1);
+
+    expect(dispatchKey({ ...chord('l'), repeat: true }, draft).defaultPrevented).toBe(false);
+    const mic = screen.getAllByRole('button')[1] as HTMLButtonElement;
+    mic.disabled = true;
+    expect(dispatchKey(chord('l'), draft).defaultPrevented).toBe(false);
+    expect(secondary).toHaveBeenCalledTimes(1);
+    expect(main).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the saved microphone binding instead of the default', () => {
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ toggleMicrophone: { mac: 'Control+Q', other: 'Control+Q' } }),
+    );
+    const onClick = jest.fn();
+    renderHarness(
+      undefined,
+      '/c/test-convo',
+      undefined,
+      <section data-chat-pane="0">
+        <button data-composer-shortcut="toggleMicrophone" onClick={onClick} />
+      </section>,
+    );
+
+    expect(dispatchKey(chord('д', 'KeyL')).defaultPrevented).toBe(false);
+    expect(onClick).not.toHaveBeenCalled();
+    expect(dispatchKey({ key: 'q', ctrlKey: true }).defaultPrevented).toBe(true);
+    expect(onClick).toHaveBeenCalledTimes(1);
   });
 });
 

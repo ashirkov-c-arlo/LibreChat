@@ -84,6 +84,17 @@ paplay "$HOME/librechat-browser-audio-test.wav"
 systemctl --user restart pipewire-pulse.service
 ```
 
+## Захват звука внешнего приложения
+
+В существующем правиле `module-remap-source` для внешнего приложения задайте
+`source_properties=device.description=LibreChat_External_App_Capture`. Не меняйте `source_name`,
+`sink_name` или маршрутизацию приложения. Перезапустите `pipewire-pulse`. Если метку не менять,
+LibreChat по-прежнему распознает `LibreChat_Zoom_Capture`.
+
+В открытой вкладке LibreChat нажмите `Alt+Shift+B` для захвата звука браузера,
+`Alt+Shift+A` для звука внешнего приложения или `Alt+Shift+L` для микрофона.
+Повторное нажатие останавливает запись. На macOS используйте `Option` вместо `Alt`.
+
 ## Откат
 
 ```bash

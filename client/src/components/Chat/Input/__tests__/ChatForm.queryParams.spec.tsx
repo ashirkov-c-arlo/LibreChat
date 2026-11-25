@@ -657,9 +657,12 @@ describe('ChatForm URL submission', () => {
 
   it('disables the microphone while URL settings are preparing and re-enables it on timeout', async () => {
     mountComposer(initialConversation, { speechSettingsInitialized: true });
-    expect(screen.getByRole('button', { name: 'Use microphone' })).not.toBeDisabled();
+    const microphone = screen.getByRole('button', { name: 'Use microphone' });
+    expect(microphone).toBeEnabled();
+    expect(microphone).toHaveAttribute('aria-keyshortcuts', 'Alt+Shift+L');
     await act(async () => jest.advanceTimersByTime(100));
-    expect(screen.getByRole('button', { name: 'Use microphone' })).toBeDisabled();
+    expect(microphone).toBeDisabled();
+    expect(microphone).not.toHaveAttribute('aria-keyshortcuts');
     expect(screen.getByText('Sending...')).toBeInTheDocument();
     await act(async () => jest.advanceTimersByTime(3000));
     expect(screen.getByRole('button', { name: 'Use microphone' })).not.toBeDisabled();

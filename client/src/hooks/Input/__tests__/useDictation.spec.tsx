@@ -59,24 +59,20 @@ const ask = jest.fn(() => true) as unknown as jest.Mock & TAskFunction;
 
 function setup({
   autoSendText = -1,
-  speechToText = true,
   draft = '',
   isSubmitting = false,
   duringRunSubmit,
   filesLoading = false,
   deferComposerReset = false,
   disabled = false,
-  index,
 }: {
   autoSendText?: number;
-  speechToText?: boolean;
   draft?: string;
   isSubmitting?: boolean;
   duringRunSubmit?: (text: string) => boolean | void;
   filesLoading?: boolean;
   deferComposerReset?: boolean;
   disabled?: boolean;
-  index?: number;
 } = {}) {
   let text = draft;
   let uploading = filesLoading;
@@ -100,8 +96,6 @@ function setup({
       deferComposerReset,
       disabled: speechDisabled,
       autoSendText,
-      speechToText,
-      index,
     };
     return useDictation(dictationOptions);
   });
@@ -173,69 +167,10 @@ describe('useDictation', () => {
     expect(ask).toHaveBeenCalledWith({ text: 'final words' });
   });
 
-  it('owns the Shift+Alt+L shortcut through the dictation lifecycle', () => {
-    const { result, rerender } = setup();
-
-    act(() => {
-      window.dispatchEvent(
-        new KeyboardEvent('keydown', { code: 'KeyL', shiftKey: true, altKey: true }),
-      );
-    });
-    expect(mockStart).toHaveBeenCalledTimes(1);
-
-    mockIsListening = true;
-    act(() => rerender());
-    act(() => {
-      window.dispatchEvent(
-        new KeyboardEvent('keydown', { code: 'KeyL', shiftKey: true, altKey: true }),
-      );
-    });
-
-    expect(mockStop).toHaveBeenCalledTimes(1);
-    expect(result.current.transcribing).toBe(true);
-  });
-
-  it('answers the shortcut only in the pane that holds focus', () => {
-    setup({ index: 1 });
-    const pressShortcut = () =>
-      act(() => {
-        window.dispatchEvent(
-          new KeyboardEvent('keydown', { code: 'KeyL', shiftKey: true, altKey: true }),
-        );
-      });
-    const pane = (index: number) => {
-      const section = document.createElement('section');
-      section.dataset.chatPane = String(index);
-      const input = document.createElement('input');
-      section.appendChild(input);
-      document.body.appendChild(section);
-      return { section, input };
-    };
-    const first = pane(0);
-    const second = pane(1);
-
-    pressShortcut();
-    first.input.focus();
-    pressShortcut();
-    expect(mockStart).not.toHaveBeenCalled();
-
-    second.input.focus();
-    pressShortcut();
-    expect(mockStart).toHaveBeenCalledTimes(1);
-
-    first.section.remove();
-    second.section.remove();
-  });
-
-  it('refuses both direct and shortcut starts while the host disables speech', () => {
+  it('refuses to start while the host disables speech', () => {
     const { result } = setup({ disabled: true });
 
     act(() => result.current.start());
-    act(() => {
-      window.dispatchEvent(
-        new KeyboardEvent('keydown', { code: 'KeyL', shiftKey: true, altKey: true }),
-      );
-    });
 
     expect(result.current.startDisabled).toBe(true);
     expect(mockStart).not.toHaveBeenCalled();

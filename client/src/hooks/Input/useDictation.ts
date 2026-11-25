@@ -1,6 +1,5 @@
 import { useRef, useMemo, useState, useEffect, useCallback } from 'react';
 import { useToastContext } from '@librechat/client';
-import { isFocusedChatPane } from '@librechat/chat';
 import type { TAskFunction } from '~/common';
 import useGetAudioSettings from './useGetAudioSettings';
 import { useChatFormContext } from '~/Providers';
@@ -46,8 +45,6 @@ export default function useDictation({
   deferComposerReset = false,
   disabled = false,
   autoSendText,
-  speechToText,
-  index = 0,
 }: {
   ask: TAskFunction;
   /** Optional host route for a take that completes while generation is active. */
@@ -65,10 +62,6 @@ export default function useDictation({
   disabled?: boolean;
   /** Host-owned Auto Send Text preference. */
   autoSendText: number;
-  /** Host-owned Speech to Text preference. */
-  speechToText: boolean;
-  /** The chat pane this composer belongs to; only the focused pane answers the shortcut. */
-  index?: number;
 }): Dictation {
   const { setValue, reset, getValues } = methods;
   const localize = useLocalize();
@@ -301,31 +294,6 @@ export default function useDictation({
 
   const stopToComposer = useCallback(() => stopWith('compose'), [stopWith]);
   const stopAndSend = useCallback(() => stopWith('send'), [stopWith]);
-
-  useEffect(() => {
-    const handleShortcut = (event: KeyboardEvent) => {
-      if (
-        disabled ||
-        speechToText !== true ||
-        !isFocusedChatPane(index) ||
-        event.code !== 'KeyL' ||
-        !event.shiftKey ||
-        !event.altKey ||
-        event.ctrlKey ||
-        event.metaKey
-      ) {
-        return;
-      }
-      event.preventDefault();
-      if (activeRef.current) {
-        stopToComposer();
-      } else {
-        start();
-      }
-    };
-    window.addEventListener('keydown', handleShortcut);
-    return () => window.removeEventListener('keydown', handleShortcut);
-  }, [disabled, index, speechToText, start, stopToComposer]);
 
   /* Memoized so `memo(Bar)` has something that can compare equal: a fresh
      object here re-rendered the whole bar on every keystroke in the composer. */
