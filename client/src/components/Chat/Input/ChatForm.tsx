@@ -73,6 +73,7 @@ import usePastedTextEdit from '~/hooks/Files/usePastedTextEdit';
 import useAskAnswerMode from '~/hooks/Input/useAskAnswerMode';
 import { useTargetContext } from '~/Providers/TargetContext';
 import useAttachTarget from '~/hooks/Input/useAttachTarget';
+import { handedComposerFilesFamily } from '~/store/handoff';
 import useBrowserAudio from '~/hooks/Input/useBrowserAudio';
 import { chatDirectionAtom } from '~/store/chatDirection';
 import ProjectLandingChip from '../ProjectLandingChip';
@@ -81,8 +82,8 @@ import useDictation from '~/hooks/Input/useDictation';
 import { useGetStartupConfig } from '~/data-provider';
 import { lazyWithRecovery } from '~/lib/assets/lazy';
 import TextareaHeader from './TextareaHeader';
+import { composerTextareaId } from '~/common';
 import AutoPlayAudio from './AutoPlayAudio';
-import { mainTextareaId } from '~/common';
 import Actions from './Composer/Actions';
 import Queue from './Composer/Queue';
 import Tray from './Composer/Tray';
@@ -138,6 +139,12 @@ interface ChatFormProps {
   newConversation: ConvoGenerator;
   handleStopGenerating: (e: React.MouseEvent<HTMLButtonElement>) => void;
   stopGenerating: () => void;
+  /** From ChatContext: the chat stops a reply whether or not its generation has been named. */
+  stopsUnnamed: boolean;
+  /** From ChatContext: the chat takes the composer's during-run actions though not main chat. */
+  steers: boolean;
+  /** From ChatContext: the chat changes its conversation's model in place though not main chat. */
+  retargets: boolean;
 }
 
 const ChatForm = memo(function ChatForm({
@@ -160,6 +167,9 @@ const ChatForm = memo(function ChatForm({
   newConversation,
   handleStopGenerating,
   stopGenerating,
+  stopsUnnamed,
+  steers,
+  retargets,
 }: ChatFormProps) {
   const submitButtonRef = useRef<HTMLButtonElement>(null);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
@@ -167,7 +177,12 @@ const ChatForm = memo(function ChatForm({
   /** The palette anchors to the whole composer, not to its own button, so it
    *  spans the composer width and sits flush above it. */
   const composerBoxRef = useRef<HTMLDivElement>(null);
-  useFocusChatEffect(textAreaRef);
+  /**
+   * The composer the page's route, its query, its focus requests and its one textarea id speak
+   * to. A conversation beside the chat has a composer of its own, which none of those address.
+   */
+  const routed = index === 0;
+  useFocusChatEffect(textAreaRef, routed);
   const localize = useLocalize();
 
   const [, setIsScrollable] = useState(false);
@@ -294,12 +309,26 @@ const ChatForm = memo(function ChatForm({
     settingsError: urlSettingsError,
     clearSettingsError,
   } = useQueryParams({
+    routed,
     textAreaRef,
     routePending,
     targetReady: target.ready,
     onBeforePrompt: preserveText,
     onPromptSettled: settleText,
   });
+
+  /**
+   * Files staged for this conversation beside the chat arrive here when it becomes the main
+   * chat: put with whatever this composer holds, once, by the composer the route addresses.
+   */
+  const [handedFiles, setHandedFiles] = useAtom(handedComposerFilesFamily(conversationId));
+  useEffect(() => {
+    if (!routed || handedFiles == null) {
+      return;
+    }
+    setHandedFiles(null);
+    setFiles((current) => new Map([...current, ...handedFiles]));
+  }, [handedFiles, routed, setFiles, setHandedFiles]);
 
   const discardFiles = useDiscardPastedFiles(index, conversationId);
   const pastedTextEdit = usePastedTextEdit({ index, files, setFiles, textAreaRef });
@@ -379,6 +408,7 @@ const ChatForm = memo(function ChatForm({
     consumeDraft,
     addedConversation: addedConvo,
     index,
+    duringRun: routed || steers,
     conversationId,
     conversation,
     codeEnvironmentMode: codeWorkspace.mode,
@@ -483,10 +513,18 @@ const ChatForm = memo(function ChatForm({
   const idleActions = useMemo(
     () => ({
       prompts: hasPromptsAccess && slashCommandEnabled,
-      mentions: atCommandEnabled,
+      /* A mention picks the conversation's model: main chat's, or one that is changed in place. */
+      mentions: atCommandEnabled && (routed || retargets),
       attach: attachTarget.canAttach,
     }),
-    [hasPromptsAccess, slashCommandEnabled, atCommandEnabled, attachTarget.canAttach],
+    [
+      routed,
+      retargets,
+      hasPromptsAccess,
+      atCommandEnabled,
+      slashCommandEnabled,
+      attachTarget.canAttach,
+    ],
   );
   const { submitText: submitAnswerText } = answerMode;
   const dictationAnswerModeActive = answerMode.composerAnswers;
@@ -548,7 +586,7 @@ const ChatForm = memo(function ChatForm({
 
   /* The abort is generation-scoped and inert until the start POST installs the
      epoch; assistants abort through their own path and need no epoch. */
-  const canStop = steering.canControlGeneration || isAssistantsEndpoint(endpoint);
+  const canStop = stopsUnnamed || steering.canControlGeneration || isAssistantsEndpoint(endpoint);
 
   /* Memoized for `memo(Bar)`: an inline element is a new identity every render,
      and this component re-renders on every keystroke. `Actions` reads the draft
@@ -720,25 +758,30 @@ const ChatForm = memo(function ChatForm({
       }
       popovers={
         <>
-          <Suspense fallback={null}>
-            <Mention
-              index={index}
-              popoverAtom={plusPopoverAtom}
-              newConversation={generateConversation}
-              textAreaRef={textAreaRef}
-              commandChar="+"
-              placeholder="com_ui_add_model_preset"
-              includeAssistants={false}
-            />
-          </Suspense>
-          <Suspense fallback={null}>
-            <Mention
-              index={index}
-              popoverAtom={mentionPopoverAtom}
-              newConversation={newConversation}
-              textAreaRef={textAreaRef}
-            />
-          </Suspense>
+          {routed && (
+            <Suspense fallback={null}>
+              <Mention
+                index={index}
+                popoverAtom={plusPopoverAtom}
+                newConversation={generateConversation}
+                textAreaRef={textAreaRef}
+                commandChar="+"
+                placeholder="com_ui_add_model_preset"
+                includeAssistants={false}
+              />
+            </Suspense>
+          )}
+          {(routed || retargets) && (
+            <Suspense fallback={null}>
+              <Mention
+                index={index}
+                popoverAtom={mentionPopoverAtom}
+                newConversation={newConversation}
+                textAreaRef={textAreaRef}
+                inPlace={!routed}
+              />
+            </Suspense>
+          )}
           <Suspense fallback={null}>
             <PromptsCommand index={index} textAreaRef={textAreaRef} submitPrompt={submitPrompt} />
           </Suspense>
@@ -826,7 +869,7 @@ const ChatForm = memo(function ChatForm({
             onKeyUp: handleKeyUp,
             onCompositionStart: handleCompositionStart,
             onCompositionEnd: handleCompositionEnd,
-            id: mainTextareaId,
+            id: composerTextareaId(index),
             tabIndex: 0,
             'data-testid': 'text-input',
             onFocus: handleTextareaFocus,
@@ -906,7 +949,8 @@ const ChatForm = memo(function ChatForm({
           <ToolDialogs />
         </Suspense>
       </BadgeRowProvider>
-      {TextToSpeech && automaticPlayback && <AutoPlayAudio index={index} />}
+      {/* Reads main chat's run and owns the page's one audio element. */}
+      {routed && TextToSpeech && automaticPlayback && <AutoPlayAudio index={index} />}
     </ComposerFrame>
   );
 });
@@ -955,6 +999,9 @@ function ChatFormWrapper({
     newConversation,
     handleStopGenerating,
     stopGenerating,
+    stopsUnnamed = false,
+    steers = false,
+    retargets = false,
   } = useChatContext();
 
   /**
@@ -1035,6 +1082,9 @@ function ChatFormWrapper({
       newConversation={stableNewConversation}
       handleStopGenerating={stableHandleStop}
       stopGenerating={stableStop}
+      stopsUnnamed={stopsUnnamed}
+      steers={steers}
+      retargets={retargets}
     />
   );
 }
