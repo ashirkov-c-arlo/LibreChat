@@ -2,6 +2,7 @@ import React from 'react';
 import { RecoilRoot } from 'recoil';
 import { act, renderHook } from '@testing-library/react';
 import { findPhysicalMicrophone, BROWSER_CAPTURE_DEVICE_KEY } from '../capture';
+import { captureComposerDraft } from '~/utils/drafts';
 import useBrowserAudio from '../useBrowserAudio';
 
 type MutateOptions = { onSuccess?: (data: { text: string }) => void; onError?: () => void };
@@ -60,14 +61,14 @@ const methods = {
 };
 const ask = jest.fn(() => true);
 
-const setup = () =>
+const setup = (autoSendText = -1) =>
   renderHook(
     () =>
       useBrowserAudio({
         ask: ask as never,
         methods: methods as never,
         isSubmitting: false,
-        autoSendText: -1,
+        autoSendText,
         speechToText: true,
       }),
     { wrapper: ({ children }) => <RecoilRoot>{children}</RecoilRoot> },
@@ -192,6 +193,41 @@ describe('useBrowserAudio', () => {
       message: 'com_ui_browser_audio_unavailable',
       status: 'error',
     });
+  });
+
+  it('transcribes local WAV without opening devices or sending the message', () => {
+    const { result } = setup(0);
+    const audio = new File([new Uint8Array(100)], 'recording.wav', { type: 'audio/wav' });
+    const owner = captureComposerDraft(0, 'new');
+    act(() => expect(result.current.transcribeLocal(audio, owner)).toBe(true));
+    expect(result.current.loading).toBe(true);
+    expect(mockEnumerate).not.toHaveBeenCalled();
+    expect(mockGetUserMedia).not.toHaveBeenCalled();
+    expect(result.current.transcribeLocal(audio, owner)).toBe(false);
+    expect(mockProcessAudio).toHaveBeenCalledTimes(1);
+    expect(mockProcessAudio.mock.calls[0][0].get('audio')).toBe(audio);
+    methods.getValues.mockReturnValueOnce('draft edited while transcribing');
+    act(() => mockProcessAudio.mock.calls[0][1].onSuccess?.({ text: 'heard' }));
+    expect(methods.setValue).toHaveBeenCalledWith('text', 'draft edited while transcribing heard', {
+      shouldValidate: true,
+    });
+    expect(result.current.loading).toBe(false);
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it('does not write a local transcript after its draft lost ownership', () => {
+    const { result } = setup();
+    const owner = captureComposerDraft(0, 'new');
+    const audio = new File([new Uint8Array(100)], 'recording.wav', { type: 'audio/wav' });
+    act(() => expect(result.current.transcribeLocal(audio, owner)).toBe(true));
+    window.history.replaceState(null, '', '/c/another-chat');
+    try {
+      act(() => mockProcessAudio.mock.calls[0][1].onSuccess?.({ text: 'heard' }));
+      expect(methods.setValue).not.toHaveBeenCalled();
+      expect(result.current.busy).toBe(false);
+    } finally {
+      window.history.replaceState(null, '', '/');
+    }
   });
 
   it('lists only librechat_ inputs', async () => {

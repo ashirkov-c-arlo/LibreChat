@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        LibreChat Shot
 // @namespace   librechat-shot@local
-// @version     1.0.0
+// @version     2.0.0
 // @match       __LIBRECHAT_MATCH__
 // @grant       none
 // @noframes
@@ -19,6 +19,7 @@
   let socket = null;
   let retryTimer;
   let retryDelay = 1000;
+  let audioTarget = null;
 
   function isUsable(element) {
     return (
@@ -56,24 +57,12 @@
     return true;
   }
 
-  function toggleAudio(pane, action) {
-    if (action === 'microphone') {
-      const button = pane.querySelector('button[data-composer-shortcut="toggleMicrophone"]');
-      if (!isUsable(button)) {
-        return false;
-      }
-      button.click();
-      return true;
-    }
-    if (action !== 'browser' && action !== 'externalApp') {
-      return false;
-    }
-    const button = pane.querySelector('button[data-testid="browser-audio-recorder"]');
-    if (!isUsable(button)) {
-      return false;
-    }
-    button.dispatchEvent(new CustomEvent('librechat:capture-shortcut', { detail: action }));
-    return true;
+  function routeAudio(button, audio) {
+    const event = new CustomEvent('librechat:transcribe-local-audio', {
+      cancelable: true,
+      detail: audio,
+    });
+    return !button.dispatchEvent(event);
   }
 
   function deliver(data) {
@@ -83,7 +72,42 @@
       return false;
     }
     const pane = panes[0];
-    return typeof data === 'string' ? toggleAudio(pane, data) : attachPng(pane, data);
+    const button = pane.querySelector('button[data-local-audio]');
+    if (data === 'arm-audio') {
+      audioTarget = null;
+      if (!isUsable(button) || !routeAudio(button, null)) {
+        return false;
+      }
+      audioTarget = {
+        button,
+        path: location.pathname,
+        owner: button.getAttribute('data-local-audio'),
+      };
+      return true;
+    }
+    if (!(data instanceof ArrayBuffer)) {
+      return false;
+    }
+    const bytes = new Uint8Array(data, 0, Math.min(data.byteLength, 12));
+    const signature = String.fromCharCode(...bytes);
+    if (signature.startsWith('\x89PNG\r\n\x1a\n')) {
+      return attachPng(pane, data);
+    }
+    if (!signature.startsWith('RIFF') || signature.slice(8) !== 'WAVE') {
+      return false;
+    }
+    const target = audioTarget;
+    audioTarget = null;
+    if (
+      target == null ||
+      target.button !== button ||
+      target.path !== location.pathname ||
+      target.owner !== button.getAttribute('data-local-audio') ||
+      !isUsable(button)
+    ) {
+      return false;
+    }
+    return routeAudio(button, new File([data], 'recording.wav', { type: 'audio/wav' }));
   }
 
   function connect() {
@@ -106,9 +130,12 @@
       if (!armed || socket !== connection) {
         return;
       }
-      if (event.data === 'ready') {
+      if (event.data === 'ready' || event.data === 'ready-v2') {
         retryDelay = 1000;
         console.info('[LibreChat Shot] This tab is connected.');
+        if (event.data === 'ready') {
+          console.warn('[LibreChat Shot] Update the local bridge to use audio shortcuts.');
+        }
         return;
       }
       let accepted = false;
@@ -126,6 +153,7 @@
         return;
       }
       socket = null;
+      audioTarget = null;
       if (event.code === 4009) {
         disconnect();
         console.warn('[LibreChat Shot] Another tab is already connected.');
@@ -138,6 +166,7 @@
 
   function disconnect() {
     armed = false;
+    audioTarget = null;
     clearTimeout(retryTimer);
     const connection = socket;
     socket = null;

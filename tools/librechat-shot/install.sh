@@ -7,7 +7,7 @@ if [[ $# -lt 1 || $# -gt 2 ]]; then
   exit 2
 fi
 
-for tool in gnome-shell gnome-extensions glib-compile-schemas python3 systemctl; do
+for tool in gnome-shell gnome-extensions glib-compile-schemas python3 systemctl pactl parec; do
   if ! command -v "$tool" >/dev/null; then
     printf 'Required command not found: %s\n' "$tool" >&2
     exit 1
@@ -69,7 +69,7 @@ PY
 
 python3 -m venv "$share/venv"
 "$share/venv/bin/python" -m pip install --no-cache-dir -r "$source_dir/requirements.txt"
-install -m 600 "$source_dir/bridge.py" "$share/bridge.py"
+install -m 600 "$source_dir/bridge.py" "$source_dir/audio.py" "$share/"
 install -D -m 600 "$source_dir/librechat-shot-bridge.service" "$unit_dir/librechat-shot-bridge.service"
 install -D -m 600 "$source_dir/extension/metadata.json" "$extension/metadata.json"
 install -m 600 "$source_dir/extension/extension.js" "$extension/extension.js"

@@ -1,6 +1,6 @@
 import asyncio
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from aiohttp import WSMsgType, WSServerHandshakeError
 from aiohttp.test_utils import TestClient, TestServer
@@ -24,36 +24,74 @@ class BridgeTest(unittest.IsolatedAsyncioTestCase):
 
     async def receiver(self):
         socket = await self.client.ws_connect(f"/ws?token={TOKEN}", headers=BROWSER_HEADERS)
-        self.assertEqual(await socket.receive_str(timeout=2), "ready")
+        self.assertEqual(await socket.receive_str(timeout=2), "ready-v2")
         return socket
 
-    async def test_delivers_binary_png_and_audio_commands_to_one_receiver(self):
+    async def test_delivers_png_to_one_receiver(self):
         socket = await self.receiver()
         second = await self.client.ws_connect(f"/ws?token={TOKEN}", headers=BROWSER_HEADERS)
         rejected = await second.receive(timeout=2)
         self.assertEqual(rejected.type, WSMsgType.CLOSE)
         self.assertEqual(rejected.data, 4009)
 
-        for route, content_type, data in [
-            ("/upload", "image/png", PNG_SIGNATURE + b"data"),
-            ("/command", "text/plain", b"microphone"),
-            ("/command", "text/plain", b"browser"),
-            ("/command", "text/plain", b"externalApp"),
-        ]:
-            with self.subTest(data=data):
+        data = PNG_SIGNATURE + b"data"
+        request = asyncio.ensure_future(self.client.post(
+            "/upload", headers={**NATIVE_HEADERS, "Content-Type": "image/png"}, data=data
+        ))
+        self.assertEqual(await socket.receive_bytes(timeout=2), data)
+        self.assertFalse(request.done())
+        await socket.send_str("accepted")
+        self.assertEqual((await request).status, 204)
+
+    async def start_audio(self, socket, source):
+        take = AsyncMock()
+        take.started = asyncio.get_running_loop().create_future()
+        take.started.set_result(True)
+        take.stop.return_value = b"RIFF\x00\x00\x00\x00WAVEdata"
+        with patch("bridge.Recording.start", return_value=take) as start:
+            request = asyncio.ensure_future(self.client.post(
+                "/command", headers=NATIVE_HEADERS, data=source
+            ))
+            self.assertEqual(await socket.receive_str(timeout=2), "arm-audio")
+            start.assert_not_awaited()
+            await socket.send_str("accepted")
+            response = await request
+            self.assertEqual(response.status, 200)
+            self.assertEqual(await response.text(), "recording-started")
+            start.assert_awaited_once_with(source)
+        return take
+
+    async def test_two_presses_record_locally_and_deliver_wav(self):
+        socket = await self.receiver()
+        for source in ["browser", "externalApp", "microphone"]:
+            with self.subTest(source=source):
+                take = await self.start_audio(socket, source)
                 request = asyncio.ensure_future(self.client.post(
-                    route, headers={**NATIVE_HEADERS, "Content-Type": content_type}, data=data
+                    "/command", headers=NATIVE_HEADERS, data=source
                 ))
-                frame = await socket.receive(timeout=2)
-                if route == "/upload":
-                    self.assertEqual(frame.type, WSMsgType.BINARY)
-                    self.assertEqual(frame.data, data)
-                else:
-                    self.assertEqual(frame.type, WSMsgType.TEXT)
-                    self.assertEqual(frame.data, data.decode())
-                self.assertFalse(request.done())
+                self.assertEqual(await socket.receive_bytes(timeout=2), take.stop.return_value)
                 await socket.send_str("accepted")
-                self.assertEqual((await request).status, 204)
+                self.assertEqual(await (await request).text(), "audio-delivered")
+                take.stop.assert_awaited_once()
+                take.cancel.assert_awaited_once()
+
+    async def test_other_source_cancels_without_transcription(self):
+        socket = await self.receiver()
+        take = await self.start_audio(socket, "browser")
+        response = await self.client.post("/command", headers=NATIVE_HEADERS, data="microphone")
+        self.assertEqual(await response.text(), "recording-canceled")
+        take.stop.assert_not_awaited()
+        take.cancel.assert_awaited_once()
+
+    async def test_disconnect_cancels_recording(self):
+        socket = await self.receiver()
+        take = await self.start_audio(socket, "browser")
+        canceled = asyncio.Event()
+        take.cancel.side_effect = canceled.set
+        await socket.close()
+        await asyncio.wait_for(canceled.wait(), timeout=2)
+        take.stop.assert_not_awaited()
+        take.cancel.assert_awaited_once()
 
     async def test_rejects_invalid_origin_token_and_host(self):
         for headers, token in [
@@ -89,7 +127,7 @@ class BridgeTest(unittest.IsolatedAsyncioTestCase):
         request = asyncio.ensure_future(self.client.post(
             "/command", headers=NATIVE_HEADERS, data="browser"
         ))
-        self.assertEqual(await socket.receive_str(timeout=2), "browser")
+        self.assertEqual(await socket.receive_str(timeout=2), "arm-audio")
         await socket.send_str("unavailable")
         self.assertEqual((await request).status, 409)
 
@@ -99,7 +137,7 @@ class BridgeTest(unittest.IsolatedAsyncioTestCase):
             request = asyncio.ensure_future(self.client.post(
                 "/command", headers=NATIVE_HEADERS, data="browser"
             ))
-            self.assertEqual(await socket.receive_str(timeout=2), "browser")
+            self.assertEqual(await socket.receive_str(timeout=2), "arm-audio")
             self.assertEqual((await socket.receive(timeout=2)).type, WSMsgType.CLOSE)
             self.assertEqual((await request).status, 504)
         response = await self.client.post("/command", headers=NATIVE_HEADERS, data="browser")

@@ -2,6 +2,7 @@ import { useRef, useMemo, useState, useEffect, useCallback } from 'react';
 import { useRecoilValue } from 'recoil';
 import { useToastContext } from '@librechat/client';
 import type { BrowserCaptureDevice, CaptureSource } from './capture';
+import type { CapturedComposerDraft } from '~/utils/drafts';
 import type { useChatFormContext } from '~/Providers';
 import type { TAskFunction } from '~/common';
 import {
@@ -34,6 +35,7 @@ export interface BrowserAudio {
   stop: () => void;
   loadDevices: () => Promise<void>;
   selectDevice: (deviceId: string) => Promise<void>;
+  transcribeLocal: (audio: File, owner: CapturedComposerDraft) => boolean;
 }
 
 const getFileExtension = (mimeType: string) => {
@@ -200,14 +202,7 @@ export default function useBrowserAudio({
     reset({ text: '' });
   };
 
-  const transcribe = (chunks: Blob[], mimeType: string) => {
-    const audio = new File(
-      [new Blob(chunks, { type: mimeType })],
-      `audio.${getFileExtension(mimeType)}`,
-      {
-        type: mimeType,
-      },
-    );
+  const transcribe = (audio: File, owner?: CapturedComposerDraft) => {
     const formData = new FormData();
     formData.append('audio', audio);
     if (languageSTT) {
@@ -220,10 +215,13 @@ export default function useBrowserAudio({
           return;
         }
         updateStatus('idle');
-        const existing = existingTextRef.current;
+        if (owner?.() === false) {
+          return;
+        }
+        const existing = owner ? getValues('text') : existingTextRef.current;
         const finalText = existing && text ? `${existing} ${text}` : text || existing;
         setValue('text', finalText, { shouldValidate: true });
-        if (autoSendText > -1 && speechToText && text.length > 0) {
+        if (owner == null && autoSendText > -1 && speechToText && text.length > 0) {
           autoSendTimerRef.current = setTimeout(() => {
             autoSendTimerRef.current = null;
             submitTranscript(finalText);
@@ -235,7 +233,7 @@ export default function useBrowserAudio({
           return;
         }
         showToast({
-          message: 'An error occurred while processing the audio, maybe the audio was too short',
+          message: localize('com_ui_audio_transcription_error'),
           status: 'error',
         });
         updateStatus('idle');
@@ -300,7 +298,7 @@ export default function useBrowserAudio({
             updateStatus('idle');
             return;
           }
-          transcribe(chunks, mimeType);
+          transcribe(new File(chunks, `audio.${getFileExtension(mimeType)}`, { type: mimeType }));
         },
         { once: true },
       );
@@ -412,6 +410,22 @@ export default function useBrowserAudio({
   startRef.current = start;
   const startStable = useCallback((source?: CaptureSource) => void startRef.current(source), []);
 
+  const transcribeRef = useRef(transcribe);
+  transcribeRef.current = transcribe;
+  const transcribeLocal = useCallback((audio: File, owner: CapturedComposerDraft) => {
+    if (
+      statusRef.current !== 'idle' ||
+      !owner() ||
+      audio.type !== 'audio/wav' ||
+      audio.size <= 44 ||
+      audio.size > 10_000_000
+    ) {
+      return false;
+    }
+    transcribeRef.current(audio, owner);
+    return true;
+  }, []);
+
   return useMemo(
     () => ({
       busy: status !== 'idle',
@@ -423,7 +437,17 @@ export default function useBrowserAudio({
       stop,
       loadDevices,
       selectDevice,
+      transcribeLocal,
     }),
-    [status, devices, selectedDeviceId, startStable, stop, loadDevices, selectDevice],
+    [
+      status,
+      devices,
+      selectedDeviceId,
+      startStable,
+      stop,
+      loadDevices,
+      selectDevice,
+      transcribeLocal,
+    ],
   );
 }

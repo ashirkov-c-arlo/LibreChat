@@ -34,6 +34,18 @@ import type { TChatProject, TMessage, TConversation } from 'librechat-data-provi
 import type { QueuedMessageContext } from '@librechat/chat';
 import type { SetterOrUpdater } from 'recoil';
 import type { ExtendedFile, FileSetter, ConvoGenerator, TAskFunction } from '~/common';
+import type { CapturedComposerDraft } from '~/utils/drafts';
+import {
+  cn,
+  getModelSpec,
+  captureComposerDraft,
+  hasIncompleteFiles,
+  getComposerDraftId,
+  getPendingDraftId,
+  clearAllDrafts,
+  getFilesDraftCached,
+  isPastedTextFileMarked,
+} from '~/utils';
 import {
   useTextarea,
   useAutoSave,
@@ -45,16 +57,6 @@ import {
   useFocusChatEffect,
   useCodeWorkspace,
 } from '~/hooks';
-import {
-  cn,
-  getModelSpec,
-  hasIncompleteFiles,
-  getComposerDraftId,
-  getPendingDraftId,
-  clearAllDrafts,
-  getFilesDraftCached,
-  isPastedTextFileMarked,
-} from '~/utils';
 import {
   useChatContext,
   useChatFormContext,
@@ -569,6 +571,21 @@ const ChatForm = memo(function ChatForm({
     disabled: speechDisabled || browserAudio.busy,
     autoSendText,
   });
+  const { transcribeLocal } = browserAudio;
+  const localDraft = useRef<CapturedComposerDraft | null>(null);
+  const receiveLocalAudio = useCallback(
+    (audio: File | null) => {
+      if (audio == null) {
+        const owner = captureComposerDraft(index, conversationId);
+        localDraft.current = owner() ? owner : null;
+        return localDraft.current != null;
+      }
+      const owner = localDraft.current;
+      localDraft.current = null;
+      return owner != null && transcribeLocal(audio, owner);
+    },
+    [transcribeLocal, index, conversationId],
+  );
   /** The waveform stands in for the placeholder until words arrive, and is
    *  then the only thing drawn on that line. */
   const listening = dictation.active && (textValue?.trim() ?? '') === '';
@@ -939,6 +956,7 @@ const ChatForm = memo(function ChatForm({
           speechDisabled={speechDisabled}
           dictation={dictation}
           browserAudio={browserAudio}
+          receiveLocalAudio={receiveLocalAudio}
           approvalSlot={approvalSlot}
           actionSlot={actionSlot}
           hasAddedConversation={addedConvo != null}

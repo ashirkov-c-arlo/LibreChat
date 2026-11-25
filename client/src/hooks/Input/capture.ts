@@ -4,6 +4,7 @@ export const BROWSER_CAPTURE_DEVICE_KEY = 'librechatBrowserCaptureDeviceId';
 
 export type CaptureSource = 'browser' | 'externalApp';
 export const CAPTURE_SHORTCUT_EVENT = 'librechat:capture-shortcut';
+export const LOCAL_AUDIO_EVENT = 'librechat:transcribe-local-audio';
 export const captureSourceLabels = {
   browser: 'com_ui_audio_browser_capture',
   externalApp: 'com_ui_audio_external_app_capture',

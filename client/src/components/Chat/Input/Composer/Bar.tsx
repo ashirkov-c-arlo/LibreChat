@@ -220,6 +220,7 @@ interface BarProps {
   dictation: Dictation;
   /** Optional browser-audio capture beside the mic; omitted hosts show no control. */
   browserAudio?: BrowserAudioState;
+  receiveLocalAudio: (audio: File | null) => boolean;
 }
 
 /**
@@ -251,6 +252,7 @@ function Bar({
   actionSlot,
   dictation,
   browserAudio,
+  receiveLocalAudio,
 }: BarProps) {
   const localize = useLocalize();
   const context = useBadgeRowContext();
@@ -517,6 +519,8 @@ function Bar({
             <BrowserAudio
               audio={browserAudio}
               disabled={speechDisabled || dictation.transcribing}
+              receiveLocal={receiveLocalAudio}
+              conversationId={conversationId}
             />
           )}
           {showSpeech && (

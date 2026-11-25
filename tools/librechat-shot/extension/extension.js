@@ -84,6 +84,11 @@ export default class LibreChatShot extends Extension {
     this._config = null;
   }
 
+  _showAudioStatus(label) {
+    const icon = Gio.ThemedIcon.new('audio-input-microphone-symbolic');
+    Main.osdWindowManager.showAll(icon, label, null);
+  }
+
   async _relay(action) {
     const session = this._session;
     if (session == null || this._pending != null) {
@@ -102,13 +107,33 @@ export default class LibreChatShot extends Extension {
       message.set_flags(Soup.MessageFlags.NO_REDIRECT);
       message.get_request_headers().append('X-Token', token);
       message.set_request_body_from_bytes(png ? 'image/png' : 'text/plain', body);
-      await session.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null);
-      if (message.get_status() !== Soup.Status.NO_CONTENT) {
-        throw new Error(`The bridge returned HTTP ${message.get_status()}.`);
+      const response = await session.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null);
+      if (this._session !== session) {
+        return;
       }
+      const status = message.get_status();
+      if (png && status === Soup.Status.NO_CONTENT) {
+        return;
+      }
+      if (!png && status === Soup.Status.OK) {
+        const state = new TextDecoder().decode(response.get_data());
+        const label = {
+          'recording-started': 'Recording started',
+          'audio-delivered': 'Recording sent for transcription',
+          'recording-canceled': 'Recording canceled',
+        }[state];
+        if (label != null) {
+          this._showAudioStatus(label);
+          return;
+        }
+      }
+      throw new Error(`The bridge returned HTTP ${status}.`);
     } catch (error) {
       if (this._session === session) {
         console.error(`[LibreChat Shot] ${error.message}`);
+        if (action != null) {
+          this._showAudioStatus('Audio action failed');
+        }
       }
     } finally {
       if (this._pending === session) {

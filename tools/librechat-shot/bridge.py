@@ -6,6 +6,8 @@ from pathlib import Path
 
 from aiohttp import WSMsgType, web
 
+from audio import AudioError, Recording
+
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 MAX_PNG_BYTES = 25 * 1024 * 1024
 DELIVERY_TIMEOUT = 5
@@ -19,6 +21,8 @@ class Bridge:
         self.token = config["token"].encode()
         self.receiver = None
         self.receipt = None
+        self.take = None
+        self.audio_lock = asyncio.Lock()
 
     def authorize(self, request, *, browser=False):
         origins = request.headers.getall("Origin", [])
@@ -40,7 +44,7 @@ class Bridge:
         self.receiver = socket
         try:
             await socket.prepare(request)
-            await socket.send_str("ready")
+            await socket.send_str("ready-v2")
             async for message in socket:
                 if message.type == WSMsgType.TEXT and message.data in {"accepted", "unavailable"}:
                     if self.receipt is not None and not self.receipt.done():
@@ -48,15 +52,26 @@ class Bridge:
                 else:
                     await socket.close(code=1008)
         finally:
-            self.receiver = None
             if self.receipt is not None and not self.receipt.done():
                 self.receipt.set_result(False)
+            await self.cancel_audio()
+            self.receiver = None
         return socket
 
-    async def deliver(self, data):
+    async def cancel_audio(self):
+        if self.take is not None:
+            _, take = self.take
+            self.take = None
+            await take.cancel()
+
+    def connected(self):
         socket = self.receiver
         if socket is None or socket.closed or not socket.prepared:
             raise web.HTTPServiceUnavailable(text="No LibreChat tab is connected.")
+        return socket
+
+    async def deliver(self, data):
+        socket = self.connected()
         if self.receipt is not None:
             raise web.HTTPConflict(text="Another action is in progress.")
         self.receipt = asyncio.get_running_loop().create_future()
@@ -97,7 +112,46 @@ class Bridge:
         command = data.decode("ascii", errors="replace")
         if request.content_type != "text/plain" or command not in COMMANDS:
             raise web.HTTPBadRequest(text="Unknown command.")
-        return await self.deliver(command)
+        if self.audio_lock.locked():
+            raise web.HTTPConflict(text="Another audio action is in progress.")
+        async with self.audio_lock:
+            socket = self.connected()
+            if self.take is not None:
+                source, take = self.take
+                self.take = None
+                try:
+                    if source != command:
+                        return web.Response(text="recording-canceled")
+                    data = await take.stop()
+                    if data is None:
+                        raise web.HTTPConflict(text="No complete audio recording is available.")
+                    if self.receiver is not socket or socket.closed:
+                        raise web.HTTPServiceUnavailable(text="The LibreChat tab disconnected.")
+                    await self.deliver(data)
+                    return web.Response(text="audio-delivered")
+                finally:
+                    await take.cancel()
+            await self.deliver("arm-audio")
+            if self.receiver is not socket or socket.closed:
+                raise web.HTTPServiceUnavailable(text="The LibreChat tab disconnected.")
+            try:
+                take = await Recording.start(command)
+            except AudioError as error:
+                raise web.HTTPServiceUnavailable(text=str(error)) from None
+            active = (command, take)
+            self.take = active
+            ready = False
+            try:
+                started = await asyncio.wait_for(asyncio.shield(take.started), timeout=2)
+                if not started or self.receiver is not socket or socket.closed:
+                    raise web.HTTPServiceUnavailable(text="Audio recording did not start.")
+                ready = True
+            except TimeoutError:
+                raise web.HTTPServiceUnavailable(text="Audio recording did not start.") from None
+            finally:
+                if self.take is active and not ready:
+                    await self.cancel_audio()
+            return web.Response(text="recording-started")
 
     async def close(self, _app):
         if self.receiver is not None:

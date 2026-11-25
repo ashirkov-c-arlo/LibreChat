@@ -919,6 +919,8 @@ describe('audio shortcuts', () => {
           <textarea data-testid="draft" />
           <Audio
             disabled={false}
+            conversationId="new"
+            receiveLocal={() => false}
             audio={{
               listening,
               busy: listening,
@@ -935,6 +937,7 @@ describe('audio shortcuts', () => {
               },
               loadDevices: async () => {},
               selectDevice,
+              transcribeLocal: () => false,
             }}
           />
         </section>

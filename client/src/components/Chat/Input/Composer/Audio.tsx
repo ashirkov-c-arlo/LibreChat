@@ -13,6 +13,7 @@ import type { CaptureSource } from '~/hooks/Input/capture';
 import type { MenuItemProps } from '~/common';
 import {
   CAPTURE_SHORTCUT_EVENT,
+  LOCAL_AUDIO_EVENT,
   captureSourceLabels,
   getCaptureSource,
 } from '~/hooks/Input/capture';
@@ -36,10 +37,12 @@ interface BrowserAudioProps {
   audio: BrowserAudioState;
   /** Speech is gated off, or the microphone is busy with its own take. */
   disabled: boolean;
+  receiveLocal: (audio: File | null) => boolean;
+  conversationId: string;
 }
 
 /** Records audio from a virtual capture device. */
-function BrowserAudio({ audio, disabled }: BrowserAudioProps) {
+function BrowserAudio({ audio, disabled, receiveLocal, conversationId }: BrowserAudioProps) {
   const localize = useLocalize();
   const menuId = useId();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -73,9 +76,24 @@ function BrowserAudio({ audio, disabled }: BrowserAudioProps) {
       return;
     }
     const onShortcut = (event: Event) => toggle((event as CustomEvent<CaptureSource>).detail);
+    const onLocal = (event: Event) => {
+      const audio = (event as CustomEvent<File | null>).detail;
+      if (
+        !unavailable &&
+        !listening &&
+        (audio === null || audio instanceof File) &&
+        receiveLocal(audio)
+      ) {
+        event.preventDefault();
+      }
+    };
     button.addEventListener(CAPTURE_SHORTCUT_EVENT, onShortcut);
-    return () => button.removeEventListener(CAPTURE_SHORTCUT_EVENT, onShortcut);
-  }, [toggle]);
+    button.addEventListener(LOCAL_AUDIO_EVENT, onLocal);
+    return () => {
+      button.removeEventListener(CAPTURE_SHORTCUT_EVENT, onShortcut);
+      button.removeEventListener(LOCAL_AUDIO_EVENT, onLocal);
+    };
+  }, [toggle, unavailable, listening, receiveLocal]);
 
   const onMenuOpenChange = useCallback(
     (open: boolean) => {
@@ -128,6 +146,7 @@ function BrowserAudio({ audio, disabled }: BrowserAudioProps) {
           <IconButton
             ref={buttonRef}
             data-testid="browser-audio-recorder"
+            data-local-audio={conversationId}
             label={label}
             size="md"
             shape="composer"

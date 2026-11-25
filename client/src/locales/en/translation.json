@@ -3376,6 +3376,7 @@
   "com_ui_audio_capture_select_browser": "Select the LibreChat capture device for your browser in the microphone prompt.",
   "com_ui_audio_capture_select_external_app": "Select the LibreChat capture device for your external app in the microphone prompt.",
   "com_ui_audio_capture_source_unavailable": "{{0}} is not available. Check your audio routing.",
+  "com_ui_audio_transcription_error": "Could not transcribe the audio recording.",
   "com_ui_browser_audio_error": "Could not record audio from the capture device.",
   "com_ui_browser_audio_devices": "Select audio capture device",
   "com_ui_browser_audio_no_devices": "No LibreChat audio capture devices found.",
