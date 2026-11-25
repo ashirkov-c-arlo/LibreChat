@@ -3,6 +3,7 @@ import { useRecoilValue } from 'recoil';
 import { useWatch } from 'react-hook-form';
 import { useAtom, useAtomValue } from 'jotai';
 import { useNavigate } from 'react-router-dom';
+import { useToastContext } from '@librechat/client';
 import { isInlineablePastedText } from '@librechat/chat';
 import { useDirection } from '@radix-ui/react-direction';
 import {
@@ -18,18 +19,20 @@ import {
   ComposerHints as Hints,
 } from '@librechat/chat/components';
 import {
-  useSteering,
-  useComposerItems,
-  showStopButtonByIndex,
-  useComposerRestoreHost,
-} from '@librechat/chat/react';
-import {
   Constants,
   Permissions,
   PermissionTypes,
   isAgentsEndpoint,
   isAssistantsEndpoint,
 } from 'librechat-data-provider';
+import {
+  useSteering,
+  useComposerItems,
+  showStopButtonByIndex,
+  useComposerRestoreHost,
+  pendingQuotesByConvoId,
+  pendingManualSkillsByConvoId,
+} from '@librechat/chat/react';
 import type { TChatProject, TMessage, TConversation } from 'librechat-data-provider';
 import type { QueuedMessageContext } from '@librechat/chat';
 import type { SetterOrUpdater } from 'recoil';
@@ -78,6 +81,7 @@ import useAttachTarget from '~/hooks/Input/useAttachTarget';
 import { handedComposerFilesFamily } from '~/store/handoff';
 import useBrowserAudio from '~/hooks/Input/useBrowserAudio';
 import { chatDirectionAtom } from '~/store/chatDirection';
+import useScreenshot from '~/hooks/Input/useScreenshot';
 import ProjectLandingChip from '../ProjectLandingChip';
 import useHasAccess from '~/hooks/Roles/useHasAccess';
 import useDictation from '~/hooks/Input/useDictation';
@@ -460,6 +464,7 @@ const ChatForm = memo(function ChatForm({
   const {
     isNotAppendable,
     handlePaste,
+    routeFiles,
     handleKeyDown,
     handleCompositionStart,
     handleCompositionEnd,
@@ -725,6 +730,48 @@ const ChatForm = memo(function ChatForm({
           ),
     [answerMode, steering, submitMessage, methods, index, target.ready, routePending],
   );
+
+  const { showToast } = useToastContext();
+  const quotes = useAtomValue(pendingQuotesByConvoId(conversationId));
+  const skills = useAtomValue(pendingManualSkillsByConvoId(conversationId));
+  const canAttachScreenshot =
+    attachTarget.canAttach &&
+    !composerReserved &&
+    !isPreparingFromUrl &&
+    !isNotAppendable &&
+    !routePending &&
+    target.ready;
+  useScreenshot({
+    surface: composerBoxRef,
+    index,
+    conversationId,
+    files,
+    hasDraft: () => !!methods.getValues('text') || quotes.length > 0 || skills.length > 0,
+    canAttach: canAttachScreenshot,
+    canSend:
+      canAttachScreenshot &&
+      !!endpoint &&
+      codeWorkspace.canSubmit &&
+      !isSubmitting &&
+      !steering.duringRunActive &&
+      !dictation.active &&
+      !dictation.transcribing &&
+      !browserAudio.busy,
+    routeFiles,
+    submit: () => {
+      const button = submitButtonRef.current;
+      if (
+        button?.form != null &&
+        !button.disabled &&
+        !methods.getValues('text') &&
+        submitComposerText({ text: '' }) !== false
+      ) {
+        clearSettingsError();
+      }
+    },
+    onError: () =>
+      showToast({ message: localize('com_ui_screenshot_attach_error'), status: 'error' }),
+  });
 
   return (
     <ComposerFrame

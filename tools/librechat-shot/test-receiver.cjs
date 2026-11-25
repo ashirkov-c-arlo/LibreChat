@@ -11,7 +11,7 @@ function setup(context) {
   const { window } = new JSDOM(
     `<button id="other">Other</button>
      <section data-chat-pane="0"><form>
-       <textarea data-testid="text-input"></textarea>
+       <div data-testid="composer-surface"><textarea data-testid="text-input"></textarea></div>
        <input type="file" hidden>
        <button type="button" data-local-audio="new">Capture</button>
      </form></section>
@@ -63,6 +63,22 @@ test('passes PNG to the main draft without moving focus or submitting', (context
   assert.equal(received[0].type, 'image/png');
   assert.equal(document.activeElement.id, 'other');
   assert.equal(document.querySelector('[data-chat-pane="1"] input').files.length, 0);
+});
+
+test('passes PNG to the updated composer without also using the old file input', (context) => {
+  const { window, document, input, receipts, deliver } = setup(context);
+  const files = [];
+  input.addEventListener('change', () => assert.fail('Unexpected duplicate upload'));
+  document
+    .querySelector('[data-testid="composer-surface"]')
+    .addEventListener('librechat:attach-screenshot', (event) => {
+      files.push(event.detail);
+      event.preventDefault();
+    });
+  deliver(new window.Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]).buffer);
+  assert.deepEqual(receipts, ['accepted']);
+  assert.equal(files.length, 1);
+  assert.equal(files[0].type, 'image/png');
 });
 
 function wav(window) {

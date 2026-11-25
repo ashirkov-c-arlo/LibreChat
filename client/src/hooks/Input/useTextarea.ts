@@ -670,6 +670,7 @@ export default function useTextarea({
   return {
     textAreaRef,
     handlePaste,
+    routeFiles,
     handleKeyDown,
     isNotAppendable,
     handleCompositionEnd,

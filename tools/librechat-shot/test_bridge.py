@@ -47,6 +47,7 @@ class BridgeTest(unittest.IsolatedAsyncioTestCase):
         take = AsyncMock()
         take.started = asyncio.get_running_loop().create_future()
         take.started.set_result(True)
+        take.task = asyncio.get_running_loop().create_future()
         take.stop.return_value = b"RIFF\x00\x00\x00\x00WAVEdata"
         with patch("bridge.Recording.start", return_value=take) as start:
             request = asyncio.ensure_future(self.client.post(
@@ -74,6 +75,18 @@ class BridgeTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await (await request).text(), "audio-delivered")
                 take.stop.assert_awaited_once()
                 take.cancel.assert_awaited_once()
+
+    async def test_status_reports_a_live_recording_and_clears_after_exit(self):
+        socket = await self.receiver()
+        for headers in [{"Host": HOST}, {**NATIVE_HEADERS, "Origin": ORIGIN}]:
+            self.assertEqual((await self.client.get("/recording", headers=headers)).status, 403)
+        take = await self.start_audio(socket, "externalApp")
+        response = await self.client.get("/recording", headers=NATIVE_HEADERS)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        self.assertEqual(await response.text(), "externalApp")
+        take.task.set_result(None)
+        response = await self.client.get("/recording", headers=NATIVE_HEADERS)
+        self.assertEqual(await response.text(), "")
 
     async def test_other_source_cancels_without_transcription(self):
         socket = await self.receiver()

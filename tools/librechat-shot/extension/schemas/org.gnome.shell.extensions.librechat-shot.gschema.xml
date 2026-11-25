@@ -5,6 +5,10 @@
       <default>['&lt;Super&gt;&lt;Alt&gt;d']</default>
       <summary>Capture the focused window</summary>
     </key>
+    <key name="librechat-shot-area" type="as">
+      <default>['&lt;Super&gt;&lt;Alt&gt;c']</default>
+      <summary>Capture a screen area between two pointer positions</summary>
+    </key>
     <key name="librechat-shot-microphone" type="as">
       <default>['&lt;Super&gt;&lt;Alt&gt;e']</default>
       <summary>Start or stop microphone recording</summary>

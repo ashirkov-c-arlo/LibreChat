@@ -72,7 +72,8 @@ python3 -m venv "$share/venv"
 install -m 600 "$source_dir/bridge.py" "$source_dir/audio.py" "$share/"
 install -D -m 600 "$source_dir/librechat-shot-bridge.service" "$unit_dir/librechat-shot-bridge.service"
 install -D -m 600 "$source_dir/extension/metadata.json" "$extension/metadata.json"
-install -m 600 "$source_dir/extension/extension.js" "$extension/extension.js"
+install -m 600 "$source_dir/extension/extension.js" "$source_dir/extension/prefs.js" \
+  "$source_dir/extension/stylesheet.css" "$extension/"
 schema=org.gnome.shell.extensions.librechat-shot.gschema.xml
 install -D -m 600 "$source_dir/extension/schemas/$schema" "$extension/schemas/$schema"
 glib-compile-schemas --strict "$extension/schemas"

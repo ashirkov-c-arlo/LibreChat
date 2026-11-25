@@ -153,6 +153,15 @@ class Bridge:
                     await self.cancel_audio()
             return web.Response(text="recording-started")
 
+    async def recording(self, request):
+        self.authorize(request)
+        source = ""
+        if self.take is not None:
+            action, take = self.take
+            if take.started.done() and take.started.result() and not take.task.done():
+                source = action
+        return web.Response(text=source, headers={"Cache-Control": "no-store"})
+
     async def close(self, _app):
         if self.receiver is not None:
             await self.receiver.close(code=1001)
@@ -164,6 +173,7 @@ def create_app(config):
     app.add_routes([
         web.post("/upload", bridge.upload),
         web.post("/command", bridge.command),
+        web.get("/recording", bridge.recording),
         web.get("/ws", bridge.receive),
     ])
     app.on_shutdown.append(bridge.close)

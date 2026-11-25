@@ -20,6 +20,7 @@ import type { TranslationKeys } from '~/hooks/useLocalize';
 import { createMessageCache } from '~/Providers/ChatHostContext';
 import { getDraft, getPendingDraftId, setDraft } from '~/utils';
 import { ChatContext, ChatFormProvider } from '~/Providers';
+import { autoSendScreenshotAtom } from '~/store/screenshot';
 import { TargetContext } from '~/Providers/TargetContext';
 import { AuthContextProvider } from '~/hooks/AuthContext';
 import { SteerHostTestProvider } from 'test/steerHost';
@@ -248,6 +249,7 @@ const image = () => new File(['image-bytes'], 'cat.png', { type: 'image/png' });
 afterEach(() => {
   resetSubmitting(getDefaultStore());
   getDefaultStore().set(filesFamily(0), new Map());
+  getDefaultStore().set(autoSendScreenshotAtom, false);
 });
 
 describe('ChatForm attachments', () => {
@@ -264,6 +266,30 @@ describe('ChatForm attachments', () => {
     mockUpload.mockImplementation((body: FormData) =>
       Promise.resolve({ ...uploadResponse, temp_file_id: body.get('file_id') as string }),
     );
+  });
+
+  test('sends a LibreChat Shot screenshot only after the upload completes', async () => {
+    getDefaultStore().set(autoSendScreenshotAtom, true);
+    let finish: (() => void) | undefined;
+    mockUpload.mockImplementation(
+      (body: FormData) =>
+        new Promise<TFileUpload>((resolve) => {
+          finish = () => resolve({ ...uploadResponse, temp_file_id: String(body.get('file_id')) });
+        }),
+    );
+    renderComposer();
+    fireEvent(
+      screen.getByTestId('composer-surface'),
+      new CustomEvent('librechat:attach-screenshot', {
+        cancelable: true,
+        detail: image(),
+      }),
+    );
+    await waitFor(() => expect(mockUpload).toHaveBeenCalledTimes(1));
+    expect(mockAsk).not.toHaveBeenCalled();
+    finish?.();
+    await waitFor(() => expect(mockAsk).toHaveBeenCalledTimes(1));
+    expect(mockAsk.mock.calls[0][0]).toMatchObject({ text: '' });
   });
 
   test('keeps the mic disabled until speech settings hydrate', async () => {

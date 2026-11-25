@@ -51,6 +51,7 @@ import { RevokeKeys } from '../SettingsTabs/Data/RevokeKeys';
 import { ClearChats } from '../SettingsTabs/Data/ClearChats';
 import { TokenCredits, AutoRefill } from './BillingControls';
 import AdminPanel from '../SettingsTabs/General/AdminPanel';
+import { autoSendScreenshotAtom } from '~/store/screenshot';
 import SharedLinks from '../SettingsTabs/Data/SharedLinks';
 import ImageResize from '../SettingsTabs/Chat/ImageResize';
 import Workspaces from '~/components/Channels/Workspaces';
@@ -547,6 +548,18 @@ export const registry: SettingEntry[] = [
       stateAtom: store.alwaysMakeProd,
       localizationKey: 'com_nav_always_make_prod',
       switchId: 'alwaysMakeProd',
+    }),
+  },
+  {
+    id: 'autoSendScreenshot',
+    tab: CHAT,
+    section: 'messages',
+    labelKey: 'com_nav_auto_send_screenshot',
+    Component: toggleControl({
+      stateAtom: autoSendScreenshotAtom,
+      localizationKey: 'com_nav_auto_send_screenshot',
+      switchId: 'autoSendScreenshot',
+      hoverCardText: 'com_nav_auto_send_screenshot_desc',
     }),
   },
   {

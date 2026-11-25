@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        LibreChat Shot
 // @namespace   librechat-shot@local
-// @version     2.0.0
+// @version     2.1.0
 // @match       __LIBRECHAT_MATCH__
 // @grant       none
 // @noframes
@@ -37,13 +37,25 @@
     if (!isUsable(textarea) || form == null || bytes.byteLength === 0) {
       return false;
     }
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const file = new File([bytes], `window-${stamp}.png`, { type: 'image/png' });
+    const surface = textarea.closest('[data-testid="composer-surface"]');
+    if (
+      surface != null &&
+      !surface.dispatchEvent(
+        new CustomEvent('librechat:attach-screenshot', {
+          cancelable: true,
+          detail: file,
+        }),
+      )
+    ) {
+      return true;
+    }
+
     const inputs = form.querySelectorAll('input[type="file"]');
     if (inputs.length > 1 || inputs[0]?.matches(':disabled')) {
       return false;
     }
-
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const file = new File([bytes], `window-${stamp}.png`, { type: 'image/png' });
     const transfer = new DataTransfer();
     transfer.items.add(file);
     if (inputs.length === 1) {
