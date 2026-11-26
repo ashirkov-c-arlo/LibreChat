@@ -22,7 +22,7 @@ import {
 } from '~/agents/toggles';
 import { requiresEphemeralUserConnection, validateMCPServerConfig } from '~/mcp/utils';
 import { ASK_USER_QUESTION_TOOL_NAME } from '~/agents/hitl/askUserQuestionTool';
-import { getCustomEndpointConfig, chatDefaultsAskUser } from '~/app/config';
+import { getCustomEndpointConfig, getChatDefaults } from '~/app/config';
 import { resolveMCPClientCapabilityProfile } from '~/mcp/capabilities';
 import { getLookupConcurrency } from '~/utils/concurrency';
 import { mapWithConcurrency } from '~/utils/promise';
@@ -35,15 +35,17 @@ function applyModelSpecSkills(
   result: Record<string, unknown>,
   modelSpec: Pick<TModelSpec, 'skills'> | null | undefined,
   ephemeralSkills: boolean | undefined,
+  defaultSkills: boolean | undefined,
 ): void {
   if (!modelSpec || !Object.prototype.hasOwnProperty.call(modelSpec, 'skills')) {
     /** With no spec default to resolve against there is still a decision to
      *  record: the run-level `ephemeralSkillsToggle` this pane would otherwise
      *  fall back to belongs to the PRIMARY request, so leaving `skills_enabled`
      *  unset lets the other pane's badge scope this one. */
-    if (typeof ephemeralSkills === 'boolean') {
-      result.skills_enabled = ephemeralSkills;
-      if (!ephemeralSkills) {
+    const enabled = ephemeralSkills ?? defaultSkills;
+    if (enabled !== undefined) {
+      result.skills_enabled = enabled;
+      if (!enabled) {
         result.skills = [];
       }
     }
@@ -161,6 +163,7 @@ export async function loadAddedAgent(
   const ephemeralAgent: TEphemeralAgent | undefined =
     requestAgent || paneAgent ? { ...requestAgent, ...paneAgent } : undefined;
 
+  const defaults = modelSpec == null ? getChatDefaults(endpoint, appConfig) : undefined;
   const primaryIsEphemeral = primaryAgent && isEphemeralAgentId(primaryAgent.id);
   if (primaryIsEphemeral && Array.isArray(primaryAgent.tools)) {
     let endpointConfig = (appConfig?.endpoints as Record<string, unknown> | undefined)?.[
@@ -191,7 +194,7 @@ export async function loadAddedAgent(
       model,
       tools: [...primaryAgent.tools],
     };
-    applyModelSpecSkills(result, modelSpec, ephemeralAgent?.skills);
+    applyModelSpecSkills(result, modelSpec, ephemeralAgent?.skills, defaults?.skills);
     applyModelSpecSubagents(result, modelSpec);
     const mirroredArtifacts = resolveSpecArtifacts(ephemeralAgent?.artifacts, modelSpec?.artifacts);
     if (mirroredArtifacts != null) {
@@ -219,11 +222,9 @@ export async function loadAddedAgent(
    *  defaults an explicit conversation toggle overrides, and downstream
    *  `createRun` gating (hitlCapable, non-subagent, admin filter) is uniform. */
   const tools: string[] = resolveEphemeralTools(ephemeralAgent, modelSpec);
-  /** A spec-less chat on a custom endpoint takes Ask User from its `chatDefaults`
-   *  unless the request toggles it explicitly, matching the spec-default rule. */
   if (
     typeof ephemeralAgent?.ask_user_question !== 'boolean' &&
-    chatDefaultsAskUser({ endpoint, appConfig, modelSpec })
+    defaults?.askUserQuestion === true
   ) {
     tools.push(ASK_USER_QUESTION_TOOL_NAME);
   }
@@ -301,7 +302,7 @@ export async function loadAddedAgent(
     result.artifacts = artifacts;
   }
   applyModelSpecSubagents(result, modelSpec);
-  applyModelSpecSkills(result, modelSpec, ephemeralAgent?.skills);
+  applyModelSpecSkills(result, modelSpec, ephemeralAgent?.skills, defaults?.skills);
 
   const toggleToolOptions = synthesizeToggleToolOptions({ ephemeralAgent, modelSpec });
   if (toggleToolOptions) {

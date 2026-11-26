@@ -17,6 +17,7 @@ interface UseToolToggleOptions {
   storageContextKey?: string;
   toolKey: string;
   localStorageKey: LocalStorageKeys;
+  defaultValue?: boolean;
   isAuthenticated?: boolean;
   setIsDialogOpen?: (open: boolean) => void;
   /** Options for auth verification */
@@ -31,6 +32,7 @@ export function useToolToggle({
   storageContextKey,
   toolKey: _toolKey,
   localStorageKey,
+  defaultValue,
   isAuthenticated: externalIsAuthenticated,
   setIsDialogOpen,
   authConfig,
@@ -58,8 +60,8 @@ export function useToolToggle({
 
   // The actual current value comes from ephemeralAgent
   const toolValue = useMemo(() => {
-    return ephemeralAgent?.[toolKey] ?? false;
-  }, [ephemeralAgent, toolKey]);
+    return ephemeralAgent?.[toolKey] ?? defaultValue ?? false;
+  }, [ephemeralAgent, toolKey, defaultValue]);
 
   const isToolEnabled = useMemo(() => {
     // For backward compatibility, treat truthy string values as enabled

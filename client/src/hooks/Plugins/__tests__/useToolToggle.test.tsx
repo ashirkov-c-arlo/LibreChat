@@ -48,6 +48,22 @@ describe('useToolToggle', () => {
     mockStartupConfig = undefined;
   });
 
+  it('does not persist a default as a user choice when switching endpoints', () => {
+    const options = { toolKey: 'skills', localStorageKey: LocalStorageKeys.LAST_SKILLS_TOGGLE_ };
+    const { result, rerender } = renderHook(
+      ({ defaultValue }: { defaultValue?: boolean }) => useToolToggle({ ...options, defaultValue }),
+      { wrapper: Wrapper, initialProps: { defaultValue: true } as { defaultValue?: boolean } },
+    );
+    expect(result.current.toggleState).toBe(true);
+    expect(result.current.ephemeralAgent?.skills).toBeUndefined();
+    expect(localStorage.getItem(`${options.localStorageKey}new`)).toBeNull();
+    rerender({});
+    expect(result.current.toggleState).toBe(false);
+    rerender({ defaultValue: true });
+    act(() => result.current.setToggleState(false));
+    expect(result.current.toggleState).toBe(false);
+  });
+
   // ─── Dual-Write Behavior ───────────────────────────────────────────
 
   describe('non-spec mode: dual-write to defaults key', () => {

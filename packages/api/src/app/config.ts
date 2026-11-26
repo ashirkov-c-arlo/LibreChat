@@ -6,6 +6,7 @@ import {
 } from 'librechat-data-provider';
 import type {
   TEndpoint,
+  TChatDefaults,
   TCustomConfig,
   EndpointsDropParamsMap,
   TTransactionsConfig,
@@ -75,11 +76,21 @@ export const getCustomEndpointConfig = ({
   return endpointConfig && resolveCustomEndpointSecrets(endpointConfig);
 };
 
-/**
- * Whether a spec-less chat on this custom endpoint gets the `ask_user_question` tool
- * from `chatDefaults`. A modelSpec, when active, decides on its own. Reads the raw
- * config: no secret is needed, so none is resolved.
- */
+/** Reads tool defaults from the raw endpoint config without resolving secrets. */
+export function getChatDefaults(
+  endpoint: string,
+  appConfig?: AppConfig,
+): TChatDefaults | undefined {
+  if (!endpoint) {
+    return undefined;
+  }
+  const name = normalizeEndpointName(endpoint);
+  return appConfig?.endpoints?.[EModelEndpoint.custom]?.find(
+    (config) => normalizeEndpointName(config.name) === name,
+  )?.chatDefaults;
+}
+
+/** Returns whether the custom endpoint equips Ask User for a chat with no model spec. */
 export function chatDefaultsAskUser({
   endpoint,
   appConfig,
@@ -89,14 +100,10 @@ export function chatDefaultsAskUser({
   appConfig?: AppConfig;
   modelSpec?: { askUserQuestion?: boolean } | null;
 }): boolean {
-  if (modelSpec != null || endpoint == null || endpoint === '') {
-    return false;
-  }
-  const name = normalizeEndpointName(endpoint);
-  const customEndpoints = appConfig?.endpoints?.[EModelEndpoint.custom] ?? [];
   return (
-    customEndpoints.find((config) => normalizeEndpointName(config.name) === name)?.chatDefaults
-      ?.askUserQuestion === true
+    modelSpec == null &&
+    !!endpoint &&
+    getChatDefaults(endpoint, appConfig)?.askUserQuestion === true
   );
 }
 

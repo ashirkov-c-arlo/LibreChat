@@ -265,10 +265,19 @@ describe('custom endpoint chatDefaults and customParams.modelCatalog', () => {
       ...base,
       models: { default: ['Sonnet 5.5'], fetch: true },
       customParams: { modelCatalog: 'litellm' },
-      chatDefaults: { webSearch: true, askUserQuestion: true, reasoningEffort: 'medium' },
+      chatDefaults: {
+        webSearch: true,
+        askUserQuestion: true,
+        skills: true,
+        reasoningEffort: 'medium',
+      },
     });
     expect(parsed.customParams?.modelCatalog).toBe('litellm');
     expect(parsed.chatDefaults?.reasoningEffort).toBe('medium');
+    expect(parsed.chatDefaults?.skills).toBe(true);
+    expect(
+      endpointSchema.safeParse({ ...base, chatDefaults: { skills: ['example'] } }).success,
+    ).toBe(false);
   });
 
   it('rejects an unknown catalog or effort', () => {

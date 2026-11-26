@@ -617,14 +617,17 @@ describe('loadAgent', () => {
     expect(withoutFlag?.tools).not.toContain('ask_user_question');
   });
 
-  test('should equip ask_user_question from the custom endpoint chatDefaults when no spec is active', async () => {
+  test('applies custom endpoint defaults only when no spec or explicit choice overrides them', async () => {
     const { EPHEMERAL_AGENT_ID } = Constants;
     const load = (endpoint: string, spec?: string, askUser?: boolean) =>
       loadAgent(
         {
           req: {
             user: { id: 'user123' },
-            body: askUser == null ? {} : { ephemeralAgent: { ask_user_question: askUser } },
+            body:
+              askUser == null
+                ? {}
+                : { ephemeralAgent: { ask_user_question: askUser, skills: askUser } },
             config: {
               config: {},
               fileStrategy: FileSources.local,
@@ -636,7 +639,7 @@ describe('loadAgent', () => {
                     apiKey: 'key',
                     baseURL: 'http://litellm/v1',
                     models: { default: ['Sonnet 5.5'] },
-                    chatDefaults: { askUserQuestion: true },
+                    chatDefaults: { askUserQuestion: true, skills: true },
                   },
                 ],
               },
@@ -665,6 +668,10 @@ describe('loadAgent', () => {
     expect((await load('Other'))?.tools).not.toContain('ask_user_question');
     /** An explicit user toggle decides, as it does for spec defaults */
     expect((await load('LiteLLM', undefined, false))?.tools).not.toContain('ask_user_question');
+    expect((await load('LiteLLM'))?.skills_enabled).toBe(true);
+    expect((await load('LiteLLM', 'pinned'))?.skills_enabled).toBeUndefined();
+    expect((await load('Other'))?.skills_enabled).toBeUndefined();
+    expect((await load('LiteLLM', undefined, false))?.skills_enabled).toBe(false);
   });
 
   test('synthesizes background tool_options for eligible MCP tools from the ephemeralAgent flag', async () => {
@@ -1512,6 +1519,28 @@ describe('loadAgent', () => {
           },
         },
       }) as unknown as Parameters<typeof loadAddedAgent>[0]['req'];
+
+    test.each([false, true])(
+      'uses the added endpoint Skills default (mirrored=%s)',
+      async (mirrored) => {
+        const req = addedReq();
+        req.config = {
+          ...req.config,
+          endpoints: { custom: [{ name: 'LiteLLM', chatDefaults: { skills: true } }] },
+        };
+        const conversation = { endpoint: 'LiteLLM', model: 'm' } as unknown as TConversation;
+        const primaryAgent = mirrored
+          ? ({ id: EPHEMERAL_AGENT_ID as string, tools: ['web_search'] } as LibreChatAgent)
+          : undefined;
+        expect(
+          (await loadAddedAgent({ req, conversation, primaryAgent }, deps))?.skills_enabled,
+        ).toBe(true);
+        req.body = { ephemeralAgent: { skills: false } };
+        expect(
+          (await loadAddedAgent({ req, conversation, primaryAgent }, deps))?.skills_enabled,
+        ).toBe(false);
+      },
+    );
 
     const addedConversation = {
       endpoint: 'openai',

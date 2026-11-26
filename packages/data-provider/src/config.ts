@@ -2633,6 +2633,7 @@ export const chatDefaultsSchema = z.object({
   executeCode: z.boolean().optional(),
   memory: z.boolean().optional(),
   askUserQuestion: z.boolean().optional(),
+  skills: z.boolean().optional(),
   reasoningEffort: z.enum(effortValues).optional(),
 });
 

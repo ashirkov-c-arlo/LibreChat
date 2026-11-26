@@ -6,8 +6,9 @@ import type { TEphemeralAgent } from 'librechat-data-provider';
 import BadgeRowProvider from '../BadgeRowContext';
 import { setTimestamp } from '~/utils/timestamps';
 import { ephemeralAgentByConvoId } from '~/store';
+import { useToolToggle } from '~/hooks';
 
-const chatDefaults = { webSearch: true, executeCode: true, memory: true };
+const chatDefaults = { webSearch: true, executeCode: true, memory: true, skills: true };
 
 jest.mock('~/data-provider', () => ({
   useGetStartupConfig: () => ({ data: {} }),
@@ -18,7 +19,7 @@ jest.mock('~/data-provider', () => ({
 
 jest.mock('~/hooks', () => ({
   useGetAgentsConfig: () => ({ agentsConfig: null }),
-  useToolToggle: () => ({}),
+  useToolToggle: jest.fn(() => ({})),
   useSearchApiKeyForm: () => ({ setIsDialogOpen: jest.fn() }),
   useMCPServerManager: () => ({}),
 }));
@@ -40,6 +41,7 @@ const renderWith = (endpoint: string) =>
 
 beforeEach(() => {
   localStorage.clear();
+  jest.mocked(useToolToggle).mockClear();
   agent = null;
 });
 
@@ -51,6 +53,14 @@ describe('BadgeRowProvider chatDefaults', () => {
       [Tools.execute_code]: true,
       [Tools.memory]: true,
     });
+  });
+
+  it('passes the endpoint Skills default to the toggle without storing a user choice', () => {
+    renderWith('LiteLLM');
+    expect(useToolToggle).toHaveBeenCalledWith(
+      expect.objectContaining({ toolKey: 'skills', defaultValue: true }),
+    );
+    expect(agent?.skills).toBeUndefined();
   });
 
   it('lets a stored user choice override the endpoint default', () => {

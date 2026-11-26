@@ -1313,6 +1313,11 @@ endpoints:
   #     #     deploymentName: claude-3-5-haiku@20241022  # Override for this model
 
   custom:
+    # On a custom endpoint such as LiteLLM, enable Skills by default for chats without a model spec:
+    # chatDefaults:
+    #   skills: true
+    # User choices, model specs, and Skills permissions still apply.
+
     # xAI: Grok 4.7 uses the existing OpenAI-compatible chat and agent paths.
     # https://docs.x.ai/developers/grok-4-7
     # Set XAI_API_KEY in your environment. No separate SpaceXAI provider is needed.

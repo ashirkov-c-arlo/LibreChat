@@ -26,7 +26,7 @@ import {
 } from '~/agents/toggles';
 import { requiresEphemeralUserConnection, validateMCPServerConfig } from '~/mcp/utils';
 import { ASK_USER_QUESTION_TOOL_NAME } from '~/agents/hitl/askUserQuestionTool';
-import { getCustomEndpointConfig, chatDefaultsAskUser } from '~/app/config';
+import { getCustomEndpointConfig, getChatDefaults } from '~/app/config';
 import { resolveMCPClientCapabilityProfile } from '~/mcp/capabilities';
 import { getLookupConcurrency } from '~/utils/concurrency';
 import { mapWithConcurrency } from '~/utils/promise';
@@ -114,11 +114,10 @@ export async function loadEphemeralAgent(
    *  equips `ask_user_question` when the request is HITL-capable, the agent is
    *  not a subagent, and the admin hasn't excluded it. */
   const tools: string[] = resolveEphemeralTools(ephemeralAgent, modelSpec);
-  /** A spec-less chat on a custom endpoint takes Ask User from its `chatDefaults`
-   *  unless the request toggles it explicitly, matching the spec-default rule. */
+  const defaults = modelSpec == null ? getChatDefaults(endpoint, req.config) : undefined;
   if (
     typeof ephemeralAgent?.ask_user_question !== 'boolean' &&
-    chatDefaultsAskUser({ endpoint, appConfig: req.config, modelSpec })
+    defaults?.askUserQuestion === true
   ) {
     tools.push(ASK_USER_QUESTION_TOOL_NAME);
   }
@@ -205,6 +204,8 @@ export async function loadEphemeralAgent(
     if (!skillsEnabled || Array.isArray(modelSpec.skills)) {
       result.skills = [];
     }
+  } else if (defaults?.skills !== undefined) {
+    result.skills_enabled = ephemeralAgent?.skills ?? defaults.skills;
   }
   return result as Agent;
 }

@@ -279,6 +279,7 @@ export default function BadgeRowProvider({
     storageContextKey,
     toolKey: AgentCapabilities.skills,
     localStorageKey: LocalStorageKeys.LAST_SKILLS_TOGGLE_,
+    defaultValue: specName ? undefined : chatDefaults?.skills,
     isAuthenticated: true,
   });
 
