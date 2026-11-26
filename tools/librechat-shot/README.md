@@ -30,7 +30,7 @@ Use a certificate that your Firefox profile trusts for the LibreChat site. If th
 | `Super+Alt+D`          | Capture the focused window.                          |
 | `Super+Alt+C`          | Capture a screen area between two pointer positions. |
 
-The PNG uses the normal LibreChat attachment upload. For audio, wait for a red dot next to the source icon in the top GNOME panel. The source icon shows a browser, an application, or a microphone. Press the same shortcut to stop. The icon menu also names the source. The local bridge records one source at a time. To cancel without transcription, press a different audio shortcut. The bridge also discards a recording if the tab disconnects or the recording reaches five minutes. Keep the target conversation open until the transcript appears. A new conversation receives no audio from an earlier capture.
+The PNG uses the normal LibreChat attachment upload. For audio, wait for a red dot next to the source icon in the top GNOME panel. The source icon shows headphones for browser audio, a speaker for external app audio, or a microphone. Press the same shortcut to stop. The icon menu also names the source. The local bridge records one source at a time. To cancel without transcription, press a different audio shortcut. The bridge also discards a recording if the tab disconnects or the recording reaches five minutes. Keep the target conversation open until the transcript appears. A new conversation receives no audio from an earlier capture.
 
 LibreChat sends the WAV to its STT endpoint when you stop the recording. It appends the transcript to the draft and does not send the message, even if **Auto send text** is enabled for browser recording. The bridge does not save recordings to disk. No shortcut changes window or tab focus.
 
@@ -42,7 +42,7 @@ Open the camera icon in the top GNOME panel and select **Settings**. You can als
 gnome-extensions prefs librechat-shot@local
 ```
 
-To capture a screen area, press **Capture a screen area** (`Super+Alt+C` by default) at one corner. The panel icon shows that the extension is waiting for the second corner, unless audio recording is active. Move to the opposite corner and press the same shortcut. The order of the corners does not matter. The first corner expires after 20 seconds. **Capture the focused window** (`Super+Alt+D` by default) cancels the area selection and captures the window in one press.
+To capture a screen area, press **Capture a screen area** (`Super+Alt+C` by default) at one corner. A red dot next to the camera icon shows that the extension is waiting for the second corner. During audio recording, the audio source icon takes priority. Move to the opposite corner and press the same shortcut. The order of the corners does not matter. The first corner expires after 20 seconds. **Capture the focused window** (`Super+Alt+D` by default) cancels the area selection and captures the window in one press.
 
 Enter a combination in GNOME format, such as `<Super><Alt>q`, then select Apply. Clear the field to disable a shortcut. The reset button restores its default. You can also use GSettings directly. For example:
 

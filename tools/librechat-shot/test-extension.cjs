@@ -87,14 +87,15 @@ test('two opposite corners capture the same rectangle in either order', () => {
   ]) {
     const shell = setup();
     shell.press(...first);
-    assert.equal(shell.icon.icon_name, 'selection-mode-symbolic');
-    assert.equal(shell.dot.visible, false);
+    assert.equal(shell.icon.icon_name, 'camera-photo-symbolic');
+    assert.equal(shell.dot.visible, true);
     assert.match(shell.indicator.accessible_name, /opposite corner/);
     assert.equal(shell.status.length, 0);
     assert.equal(shell.relays.length, 0);
     shell.press(...second);
     assert.deepEqual(shell.relays, [[null, [10, 20, 91, 281]]]);
     assert.equal(shell.icon.icon_name, 'camera-photo-symbolic');
+    assert.equal(shell.dot.visible, false);
     assert.equal(shell.indicator.accessible_name, 'LibreChat Shot: Ready');
     assert.equal(shell.timers.size, 0);
   }
@@ -112,14 +113,15 @@ test('empty or out-of-bounds selections do not send a screenshot', () => {
     assert.equal(shell.status.length, 1);
     assert.equal(shell.timers.size, 0);
     assert.equal(shell.icon.icon_name, 'camera-photo-symbolic');
+    assert.equal(shell.dot.visible, false);
   }
 });
 
 test('shows a recording dot next to the source icon for Q, W, and E', async () => {
   const shell = setup();
   for (const [action, label, icon] of [
-    ['browser', 'browser audio', 'web-browser-symbolic'],
-    ['externalApp', 'external app audio', 'application-x-executable-symbolic'],
+    ['browser', 'browser audio', 'audio-headphones-symbolic'],
+    ['externalApp', 'external app audio', 'audio-volume-high-symbolic'],
     ['microphone', 'microphone', 'audio-input-microphone-symbolic'],
   ]) {
     await shell.command(action, 'recording-started');
@@ -139,9 +141,9 @@ test('recording takes precedence over area selection and a bridge stop restores 
   const shell = setup();
   await shell.report('browser');
   shell.press(10, 20);
-  assert.equal(shell.icon.icon_name, 'web-browser-symbolic');
+  assert.equal(shell.icon.icon_name, 'audio-headphones-symbolic');
   shell.expireArea();
-  assert.equal(shell.icon.icon_name, 'web-browser-symbolic');
+  assert.equal(shell.icon.icon_name, 'audio-headphones-symbolic');
   assert.equal(shell.dot.visible, true);
   await shell.report('');
   assert.equal(shell.icon.icon_name, 'camera-photo-symbolic');
@@ -154,13 +156,16 @@ test('expiry clears the first corner and a window capture cancels pending area s
   shell.press(10, 20);
   shell.expireArea();
   assert.equal(shell.icon.icon_name, 'camera-photo-symbolic');
+  assert.equal(shell.dot.visible, false);
   shell.press(50, 60);
   assert.equal(shell.relays.length, 0);
   shell.captureWindow();
   assert.deepEqual(shell.relays, [[null]]);
   assert.equal(shell.timers.size, 0);
   assert.equal(shell.icon.icon_name, 'camera-photo-symbolic');
+  assert.equal(shell.dot.visible, false);
   shell.press(100, 200);
   assert.equal(shell.relays.length, 1);
-  assert.equal(shell.icon.icon_name, 'selection-mode-symbolic');
+  assert.equal(shell.icon.icon_name, 'camera-photo-symbolic');
+  assert.equal(shell.dot.visible, true);
 });

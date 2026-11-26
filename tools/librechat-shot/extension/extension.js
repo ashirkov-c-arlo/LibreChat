@@ -11,8 +11,8 @@ import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 const AREA_TIMEOUT = 20;
 const RECORDING_CHECK_INTERVAL = 2;
 const sources = {
-  browser: { label: 'Recording browser audio', icon: 'web-browser-symbolic' },
-  externalApp: { label: 'Recording external app audio', icon: 'application-x-executable-symbolic' },
+  browser: { label: 'Recording browser audio', icon: 'audio-headphones-symbolic' },
+  externalApp: { label: 'Recording external app audio', icon: 'audio-volume-high-symbolic' },
   microphone: { label: 'Recording microphone', icon: 'audio-input-microphone-symbolic' },
 };
 
@@ -155,9 +155,8 @@ export default class LibreChatShot extends Extension {
     }
     const source = this._recording == null ? null : sources[this._recording];
     const selecting = this._corner != null;
-    this._dot.visible = source != null;
-    this._icon.icon_name =
-      source?.icon ?? (selecting ? 'selection-mode-symbolic' : 'camera-photo-symbolic');
+    this._dot.visible = source != null || selecting;
+    this._icon.icon_name = source?.icon ?? 'camera-photo-symbolic';
     const label = source?.label ?? (selecting ? 'Select the opposite corner' : 'Ready');
     this._statusItem.label.text = label;
     this._indicator.accessible_name = `LibreChat Shot: ${label}`;
