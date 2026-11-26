@@ -200,3 +200,7 @@ scripts/activity-labels/results/
 
 # Mutation testing sandboxes
 .stryker-tmp/
+
+# Local fork patch files
+*.patch
+patches/
